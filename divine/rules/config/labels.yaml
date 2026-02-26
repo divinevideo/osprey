@@ -1,0 +1,30 @@
+labels:
+  new_account_activity:
+    valid_for: [Pubkey]
+    connotation: neutral
+    description: Account is newly created and showing early activity patterns
+
+  warned:
+    valid_for: [Pubkey]
+    connotation: negative
+    description: Account has been warned for policy violations
+
+  suspended:
+    valid_for: [Pubkey]
+    connotation: negative
+    description: Account is temporarily suspended from the platform
+
+  banned:
+    valid_for: [Pubkey, EventId]
+    connotation: negative
+    description: Account or event is permanently banned
+
+  verified:
+    valid_for: [Pubkey]
+    connotation: positive
+    description: Account has been verified as legitimate
+
+  trusted_reporter:
+    valid_for: [Pubkey]
+    connotation: positive
+    description: Account is a trusted source for NIP-56 moderation reports
