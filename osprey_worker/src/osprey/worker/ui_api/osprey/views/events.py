@@ -29,8 +29,8 @@ from ..lib.clickhouse import (
     TopNClickHouseQuery,
     TopNPoPResponse,
 )
-from ..singletons import CLICKHOUSE
 from ..lib.marshal import marshal_with
+from ..singletons import CLICKHOUSE
 from ..validators.events import BulkLabelTopNRequest
 
 logger = logging.getLogger(__name__)

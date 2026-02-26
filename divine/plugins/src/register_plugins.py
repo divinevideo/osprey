@@ -4,7 +4,6 @@ from osprey.engine.udf.base import UDFBase
 from osprey.worker.adaptor.plugin_manager import hookimpl_osprey
 from osprey.worker.lib.config import Config
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink, StdoutOutputSink
-
 from services.relay_manager_sink import RelayManagerSink
 from services.zendesk_sink import ZendeskSink
 from udfs.ban_nostr_event import BanNostrEvent

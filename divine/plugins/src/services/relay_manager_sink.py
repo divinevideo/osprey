@@ -5,7 +5,6 @@ import requests
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
-
 from udfs.ban_nostr_event import BanEventEffect
 
 logger = get_logger(__name__)
@@ -27,9 +26,7 @@ class RelayManagerSink(BaseOutputSink):
     max_retries: int = 2
 
     def __init__(self, relay_manager_url: str | None = None) -> None:
-        self._url = relay_manager_url or os.environ.get(
-            'DIVINE_RELAY_MANAGER_URL', DEFAULT_RELAY_MANAGER_URL
-        )
+        self._url = relay_manager_url or os.environ.get('DIVINE_RELAY_MANAGER_URL', DEFAULT_RELAY_MANAGER_URL)
 
     def will_do_work(self, result: ExecutionResult) -> bool:
         return len(result.effects.get(BanEventEffect, [])) > 0

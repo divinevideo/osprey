@@ -1,9 +1,8 @@
 from typing import Optional
 
+import clickhouse_connect
 from osprey.worker.lib.config import Config
 from osprey.worker.lib.singletons import CONFIG
-
-import clickhouse_connect
 
 from .clickhouse import ClickHouseQueryBackend
 

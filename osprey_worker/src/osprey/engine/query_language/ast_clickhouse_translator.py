@@ -5,7 +5,7 @@ Druid JSON filter objects. The AST nodes are the same; only the output
 format changes.
 """
 
-from typing import Any, List, Optional
+from typing import Any
 
 from osprey.engine.ast import grammar
 from osprey.engine.ast_validator.validation_context import ValidatedSources
@@ -163,7 +163,7 @@ def _in_clause(col: str, value: Any, negated: bool) -> str:
         # Druid's 'insensitive_contains' maps to ClickHouse ilike
         like_op = 'NOT ILIKE' if negated else 'ILIKE'
         escaped = value.replace('%', '\\%').replace('_', '\\_')
-        return f'{col} {like_op} \'%{escaped}%\''
+        return f"{col} {like_op} '%{escaped}%'"
     elif isinstance(value, list):
         formatted = ', '.join(_format_value(v) for v in value)
         return f'{col} {op} ({formatted})'

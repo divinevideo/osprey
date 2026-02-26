@@ -5,19 +5,19 @@ import json
 import logging
 import os
 import uuid
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
 import websockets
 from kafka import KafkaProducer
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("nostr-kafka-bridge")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+log = logging.getLogger('nostr-kafka-bridge')
 
-RELAY_URL = os.environ.get("RELAY_URL", "wss://relay.divine.video")
-KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
-KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", "nostr-events")
-HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8080"))
+RELAY_URL = os.environ.get('RELAY_URL', 'wss://relay.divine.video')
+KAFKA_BOOTSTRAP_SERVERS = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092')
+KAFKA_TOPIC = os.environ.get('KAFKA_TOPIC', 'nostr-events')
+HEALTH_PORT = int(os.environ.get('HEALTH_PORT', '8080'))
 
 connected = False
 
@@ -28,22 +28,22 @@ class HealthHandler(BaseHTTPRequestHandler):
         status = 200 if connected else 503
         self.send_response(status)
         self.end_headers()
-        self.wfile.write(b"ok" if connected else b"disconnected")
+        self.wfile.write(b'ok' if connected else b'disconnected')
 
     def log_message(self, *_):
         pass
 
 
 def start_health_server():
-    server = HTTPServer(("0.0.0.0", HEALTH_PORT), HealthHandler)
+    server = HTTPServer(('0.0.0.0', HEALTH_PORT), HealthHandler)
     Thread(target=server.serve_forever, daemon=True).start()
-    log.info("Health check listening on :%d", HEALTH_PORT)
+    log.info('Health check listening on :%d', HEALTH_PORT)
 
 
 # --- Kafka producer ---
 def make_producer() -> KafkaProducer:
     return KafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(","),
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(','),
         value_serializer=lambda v: json.dumps(v).encode(),
     )
 
@@ -57,14 +57,14 @@ async def bridge():
     while True:
         try:
             sub_id = uuid.uuid4().hex[:16]
-            log.info("Connecting to %s (sub %s)", RELAY_URL, sub_id)
+            log.info('Connecting to %s (sub %s)', RELAY_URL, sub_id)
 
             async with websockets.connect(RELAY_URL) as ws:
                 # Subscribe to all events
-                await ws.send(json.dumps(["REQ", sub_id, {}]))
+                await ws.send(json.dumps(['REQ', sub_id, {}]))
                 connected = True
                 backoff = 1
-                log.info("Connected and subscribed")
+                log.info('Connected and subscribed')
 
                 async for raw in ws:
                     try:
@@ -75,14 +75,14 @@ async def bridge():
                     if not isinstance(msg, list) or len(msg) < 3:
                         continue
 
-                    if msg[0] == "EVENT":
+                    if msg[0] == 'EVENT':
                         event = msg[2]
                         producer.send(KAFKA_TOPIC, value=event)
-                        log.debug("Published event %s", event.get("id", "?")[:12])
+                        log.debug('Published event %s', event.get('id', '?')[:12])
 
         except Exception as exc:
             connected = False
-            log.warning("Disconnected (%s), retrying in %ds", exc, backoff)
+            log.warning('Disconnected (%s), retrying in %ds', exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -92,5 +92,5 @@ def main():
     asyncio.run(bridge())
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

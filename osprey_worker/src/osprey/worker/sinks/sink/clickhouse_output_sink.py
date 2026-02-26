@@ -6,7 +6,7 @@ would ingest so the query UI works unchanged.
 """
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 import sentry_sdk
 from osprey.engine.executor.execution_context import ExecutionResult

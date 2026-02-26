@@ -28,7 +28,7 @@ jobs:
             context: .
             dockerfile: osprey_worker/Dockerfile
           - image: osprey-ui
-            context: osprey_ui
+            context: .
             dockerfile: osprey_ui/Dockerfile
           - image: osprey-divine-worker
             context: .

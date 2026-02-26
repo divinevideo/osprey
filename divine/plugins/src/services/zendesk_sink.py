@@ -39,7 +39,7 @@ class ZendeskSink(BaseOutputSink):
                 'ticket': {
                     'subject': f'Moderation verdict: {verdict}',
                     'description': f'Automated moderation verdict from Osprey rules engine.\n\n'
-                                   f'Features: {result.extracted_features_json}',
+                    f'Features: {result.extracted_features_json}',
                     'priority': 'normal',
                     'tags': ['divine-moderation', 'automated'],
                 }

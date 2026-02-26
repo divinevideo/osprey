@@ -6,12 +6,10 @@ Pydantic models for responses so the UI API layer is unchanged.
 """
 
 import base64
-import json
 import logging
-import math
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from osprey.engine.query_language import parse_query_to_validated_ast
 from osprey.engine.query_language.ast_clickhouse_translator import ClickHouseQueryTransformer
@@ -56,7 +54,7 @@ class EntityFilter(BaseModel):
             return '1=0'
 
         escaped_id = self.id.replace("'", "\\'")
-        clauses = [f'`{feat}` = \'{escaped_id}\'' for feat in matching_features]
+        clauses = [f"`{feat}` = '{escaped_id}'" for feat in matching_features]
         return '(' + ' OR '.join(clauses) + ')'
 
 
@@ -142,6 +140,7 @@ def _build_where_clause(
             if druid_filter:
                 # Convert Druid-format ability filter to SQL
                 from osprey.engine.query_language.ast_clickhouse_translator import _druid_filter_to_sql
+
                 parts.append(f'({_druid_filter_to_sql(druid_filter)})')
 
     return ' AND '.join(parts)
@@ -218,8 +217,7 @@ class TopNClickHouseQuery(BaseClickHouseQuery):
         max_days = config.get_int('MAX_HISTORICAL_QUERY_WINDOW_DAYS', 90)
 
         if (
-            previous_start.replace(tzinfo=timezone.utc)
-            < (datetime.now(timezone.utc) - timedelta(days=max_days))
+            previous_start.replace(tzinfo=timezone.utc) < (datetime.now(timezone.utc) - timedelta(days=max_days))
             or not calculate_previous_period
         ):
             return TopNPoPResponse(current_period=current_results)
@@ -244,10 +242,7 @@ class TopNClickHouseQuery(BaseClickHouseQuery):
 
         rows = backend.query(sql)
 
-        result_data = [
-            DimensionData(count=row['count'], **{self.dimension: row['dim_value']})
-            for row in rows
-        ]
+        result_data = [DimensionData(count=row['count'], **{self.dimension: row['dim_value']}) for row in rows]
 
         return [PeriodData(timestamp=start, result=result_data)] if result_data else []
 
@@ -276,14 +271,21 @@ class TopNClickHouseQuery(BaseClickHouseQuery):
                     continue
                 diff = curr - prev
                 pct = (diff / prev * 100) if prev else None
-                diffs.append(DimensionDifference(
-                    dimension_key=key, current_count=curr, previous_count=prev,
-                    difference=diff, percentage_change=pct,
-                ))
+                diffs.append(
+                    DimensionDifference(
+                        dimension_key=key,
+                        current_count=curr,
+                        previous_count=prev,
+                        difference=diff,
+                        percentage_change=pct,
+                    )
+                )
             comparison.append(ComparisonData(differences=diffs))
 
         return TopNPoPResponse(
-            current_period=current_results, previous_period=previous_results, comparison=comparison,
+            current_period=current_results,
+            previous_period=previous_results,
+            comparison=comparison,
         )
 
 
@@ -343,12 +345,12 @@ class PaginatedScanClickHouseQuery(BaseClickHouseQuery):
 # ---------------------------------------------------------------------------
 
 _GRANULARITY_MAP = {
-    'minute': "toStartOfMinute(`__time`)",
-    'fifteen_minute': "toStartOfFifteenMinutes(`__time`)",
-    'hour': "toStartOfHour(`__time`)",
-    'day': "toStartOfDay(`__time`)",
-    'week': "toStartOfWeek(`__time`)",
-    'month': "toStartOfMonth(`__time`)",
+    'minute': 'toStartOfMinute(`__time`)',
+    'fifteen_minute': 'toStartOfFifteenMinutes(`__time`)',
+    'hour': 'toStartOfHour(`__time`)',
+    'day': 'toStartOfDay(`__time`)',
+    'week': 'toStartOfWeek(`__time`)',
+    'month': 'toStartOfMonth(`__time`)',
     'all': "'all'",
 }
 
@@ -358,7 +360,7 @@ def _granularity_to_clickhouse(granularity: str) -> str:
     if expr:
         return expr
     # Fallback: treat as interval duration string
-    return f"toStartOfInterval(`__time`, INTERVAL 1 {granularity})"
+    return f'toStartOfInterval(`__time`, INTERVAL 1 {granularity})'
 
 
 def parse_query_filter(query_filter: str) -> Optional[str]:
