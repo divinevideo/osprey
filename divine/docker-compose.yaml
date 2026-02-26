@@ -1,0 +1,208 @@
+# Divine Osprey — local development stack
+# ClickHouse replaces Druid; adds Nostr-Kafka bridge
+#
+# Usage:
+#   cd divine && docker compose up -d
+#   ./scripts/init-clickhouse.sh
+#   ./scripts/test-local.sh
+
+volumes:
+  clickhouse_data: {}
+  metadata_data: {}
+
+services:
+  # ── Kafka (KRaft, no ZooKeeper) ──────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka
+    container_name: divine-kafka
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_LISTENERS: "INTERNAL://kafka:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://kafka:29093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:29092,EXTERNAL://localhost:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: "DiVineLocalDevCluster01"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "kafka-topics --bootstrap-server kafka:29092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka-topic-creator:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      bash -c "
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic nostr-events          --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic osprey.actions_input   --partitions 3 --replication-factor 1 &&
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic osprey.execution_results --partitions 3 --replication-factor 1 &&
+        echo 'Topics created.' && kafka-topics --bootstrap-server kafka:29092 --list
+      "
+
+  # ── ClickHouse ───────────────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    hostname: clickhouse
+    container_name: divine-clickhouse
+    ports:
+      - "127.0.0.1:8123:8123"   # HTTP
+      - "127.0.0.1:9000:9000"   # Native
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── etcd ─────────────────────────────────────────────────────────────
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.12
+    hostname: etcd
+    container_name: divine-etcd
+    environment:
+      ETCD_ADVERTISE_CLIENT_URLS: "http://etcd:2379"
+      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
+    ports:
+      - "127.0.0.1:2379:2379"
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Postgres (labels service) ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    container_name: divine-postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: osprey
+      POSTGRES_PASSWORD: FoolishPassword
+      POSTGRES_DB: osprey
+    volumes:
+      - metadata_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U osprey -d osprey"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Osprey Coordinator ───────────────────────────────────────────────
+  osprey-coordinator:
+    build:
+      context: ..
+      dockerfile: osprey_coordinator/Dockerfile
+    hostname: osprey-coordinator
+    container_name: divine-coordinator
+    depends_on:
+      kafka:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5003:5000"
+    environment:
+      - PYTHONPATH=/osprey
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - ETCD_HOST=etcd
+      - ETCD_PORT=2379
+      - POSTGRES_HOSTS={"osprey_db":"postgresql://osprey:FoolishPassword@postgres:5432/osprey"}
+
+  # ── Osprey Worker (Divine variant) ───────────────────────────────────
+  osprey-worker:
+    build:
+      context: ..
+      dockerfile: divine/Dockerfile.worker
+    hostname: osprey-worker
+    container_name: divine-worker
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-topic-creator:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5001:5000"
+    environment:
+      - PYTHONPATH=/osprey
+      - PORT=5000
+      - POSTGRES_HOSTS={"osprey_db":"postgresql://osprey:FoolishPassword@postgres:5432/osprey"}
+      - OSPREY_INPUT_STREAM_SOURCE=kafka
+      - OSPREY_STDOUT_OUTPUT_SINK=True
+      - OSPREY_KAFKA_BOOTSTRAP_SERVERS=["kafka:29092"]
+      - OSPREY_KAFKA_INPUT_STREAM_TOPIC=osprey.actions_input
+      - OSPREY_KAFKA_INPUT_STREAM_CLIENT_ID=divine-worker
+      - OSPREY_KAFKA_OUTPUT_SINK=True
+      - OSPREY_KAFKA_OUTPUT_TOPIC=osprey.execution_results
+      - OSPREY_KAFKA_OUTPUT_CLIENT_ID=divine-worker
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      # ClickHouse output
+      - OSPREY_CLICKHOUSE_OUTPUT_SINK=true
+      - OSPREY_CLICKHOUSE_HOST=clickhouse
+      - OSPREY_CLICKHOUSE_PORT=8123
+      - OSPREY_CLICKHOUSE_DATABASE=osprey
+      - OSPREY_CLICKHOUSE_TABLE=osprey_events
+      # Plugins & rules
+      - OSPREY_PLUGIN_PATH=/app/divine_plugins/src
+      - OSPREY_RULES_PATH=/app/divine_rules
+      - DIVINE_RELAY_MANAGER_URL=http://host.docker.internal:5000
+      - DD_TRACE_ENABLED=False
+      - DD_DOGSTATSD_DISABLE=True
+
+  # ── Osprey UI ────────────────────────────────────────────────────────
+  osprey-ui:
+    build:
+      context: ..
+      dockerfile: osprey_ui/Dockerfile
+    hostname: osprey-ui
+    container_name: divine-ui
+    depends_on:
+      - osprey-worker
+    ports:
+      - "127.0.0.1:5002:5002"
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_API_BASE_URL=http://localhost:5004
+
+  # ── Nostr → Kafka Bridge ────────────────────────────────────────────
+  nostr-kafka-bridge:
+    build:
+      context: ..
+      dockerfile: divine/nostr-kafka-bridge/Dockerfile
+    hostname: nostr-kafka-bridge
+    container_name: divine-bridge
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-topic-creator:
+        condition: service_completed_successfully
+    environment:
+      - RELAY_URL=${RELAY_URL:-wss://relay.divine.video}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_TOPIC=nostr-events
+    restart: unless-stopped
