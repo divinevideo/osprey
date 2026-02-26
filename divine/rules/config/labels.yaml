@@ -24,6 +24,16 @@ labels:
     connotation: positive
     description: Account has been verified as legitimate
 
+  rate_limited:
+    valid_for: [Pubkey]
+    connotation: negative
+    description: "User is rate limited due to suspicious activity"
+
+  nsfw_flagged:
+    valid_for: [Pubkey]
+    connotation: negative
+    description: "User flagged for NSFW content by a trusted reporter"
+
   trusted_reporter:
     valid_for: [Pubkey]
     connotation: positive
