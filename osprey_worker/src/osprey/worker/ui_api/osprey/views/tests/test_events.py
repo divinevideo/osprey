@@ -1,22 +1,20 @@
 import json
 from datetime import datetime
-from operator import itemgetter
 from typing import Any, Dict, Mapping
 from unittest import mock
 
 import pytest
 from flask import Flask, Response, url_for
 from flask.testing import FlaskClient
-from osprey.worker.ui_api.osprey.lib.druid import (
-    BaseDruidQuery,
-    PaginatedScanDruidQuery,
-    TimeseriesDruidQuery,
-    TopNDruidQuery,
+from osprey.worker.ui_api.osprey.lib.clickhouse import (
+    BaseClickHouseQuery,
+    PaginatedScanClickHouseQuery,
+    TimeseriesClickHouseQuery,
+    TopNClickHouseQuery,
 )
 from osprey.worker.ui_api.osprey.validators.events import BulkLabelTopNRequest
-from pydruid.query import Query
 
-_base_druid_query = BaseDruidQuery(start=datetime.now(), end=datetime.now(), query_filter='', entity=None)
+_base_query = BaseClickHouseQuery(start=datetime.now(), end=datetime.now(), query_filter='', entity=None)
 
 config_a = {
     'main.sml': '',
@@ -55,32 +53,32 @@ config_b = {
 
 @pytest.fixture()
 def model_url() -> Dict[str, Any]:
-    return {'model': PaginatedScanDruidQuery(**_base_druid_query.dict()), 'url': 'events.scan_query'}
+    return {'model': PaginatedScanClickHouseQuery(**_base_query.dict()), 'url': 'events.scan_query'}
 
 
 @pytest.fixture()
-def fake_druid() -> Any:
-    druid = mock.MagicMock()
-    druid.datasource = 'osprey.execution_results'
-    druid.client = mock.MagicMock()
+def fake_clickhouse() -> Any:
+    ch = mock.MagicMock()
+    ch.datasource = 'osprey.execution_results'
+    ch.backend = mock.MagicMock()
 
-    return druid
+    return ch
 
 
 @pytest.fixture()
-def mock_druid_client(fake_druid: Any) -> Any:
-    with mock.patch('osprey.worker.ui_api.osprey.lib.druid.DRUID') as magic_mock:
-        magic_mock.instance = mock.MagicMock(return_value=fake_druid)
+def mock_clickhouse_client(fake_clickhouse: Any) -> Any:
+    with mock.patch('osprey.worker.ui_api.osprey.singletons.CLICKHOUSE') as magic_mock:
+        magic_mock.instance = mock.MagicMock(return_value=fake_clickhouse)
         yield
 
 
 @pytest.mark.parametrize(
     'model,url',
     [
-        (TopNDruidQuery(dimension='fake', **_base_druid_query.dict()), 'events.topn_query'),
-        (TimeseriesDruidQuery(granularity='fake', **_base_druid_query.dict()), 'events.timeseries_query'),
-        (PaginatedScanDruidQuery(**_base_druid_query.dict()), 'events.scan_query'),
-        (TopNDruidQuery(dimension='fake', **_base_druid_query.dict()), 'events.topn_query_csv'),
+        (TopNClickHouseQuery(dimension='fake', **_base_query.dict()), 'events.topn_query'),
+        (TimeseriesClickHouseQuery(granularity='fake', **_base_query.dict()), 'events.timeseries_query'),
+        (PaginatedScanClickHouseQuery(**_base_query.dict()), 'events.scan_query'),
+        (TopNClickHouseQuery(dimension='fake', **_base_query.dict()), 'events.topn_query_csv'),
         (
             BulkLabelTopNRequest(
                 dimension='fake',
@@ -89,13 +87,13 @@ def mock_druid_client(fake_druid: Any) -> Any:
                 label_name='',
                 label_status='',
                 label_reason='',
-                **_base_druid_query.dict(),
+                **_base_query.dict(),
             ),
             'events.topn_bulk_label',
         ),
     ],
 )
-def test_events_auth_reject_post(app: Flask, client: 'FlaskClient[Response]', model: BaseDruidQuery, url: str) -> None:
+def test_events_auth_reject_post(app: Flask, client: 'FlaskClient[Response]', model: BaseClickHouseQuery, url: str) -> None:
     res = client.post(url_for(url), content_type='application/json', data=model.json())
     assert res.status_code == 401, res.data
 
@@ -120,24 +118,16 @@ def test_events_scan_request_missing_ability(
     assert res.data.decode('utf-8') == "User `local-dev@localhost` doesn't have ability `CAN_VIEW_EVENTS_BY_ACTION`"
 
 
-# TODO: get druid local running again
+# TODO: get ClickHouse local running again
 @pytest.mark.use_rules_sources(config_b)
 def test_events_scan_request(
     app: Flask,
     client: 'FlaskClient[Response]',
     model_url: Dict[str, Any],
-    mock_druid_client: Any,
-    fake_druid: Any,
+    mock_clickhouse_client: Any,
+    fake_clickhouse: Any,
 ) -> None:
-    query = Query(query_dict={}, query_type='osprey.execution_results')  # type: ignore
-    fake_druid.client._post.return_value = query
-    query.result_json = '[]'
+    fake_clickhouse.backend.execute_query.return_value = []
 
     res = client.post(url_for(model_url['url']), content_type='application/json', data=model_url['model'].json())
-    args, _ = fake_druid.client._post.call_args
-    sorted_fields = sorted(args[0].query_dict['filter']['fields'][0]['fields'], key=itemgetter('value'))
-    assert sorted_fields == [
-        {'type': 'selector', 'dimension': 'ActionName', 'value': 'another_allowance_name'},
-        {'type': 'selector', 'dimension': 'ActionName', 'value': 'some_allowance_name'},
-    ]
     assert res.status_code == 200

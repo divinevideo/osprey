@@ -10,12 +10,18 @@ from udfs.ban_nostr_event import BanEventEffect
 
 logger = get_logger(__name__)
 
-DEFAULT_RELAY_MANAGER_URL = 'http://localhost:5000'
+DEFAULT_RELAY_MANAGER_URL = 'http://relay-manager.default.svc:5000'
 
 
 class RelayManagerSink(BaseOutputSink):
     """Output sink that consumes BanEventEffect and POSTs to the
-    relay-manager NIP-86 banevent endpoint."""
+    relay-manager NIP-86 banevent endpoint.
+
+    Requires the ``DIVINE_RELAY_MANAGER_URL`` environment variable to be set
+    to the relay-manager base URL (e.g. ``http://relay-manager.default.svc:5000``).
+    If unset, falls back to DEFAULT_RELAY_MANAGER_URL which assumes in-cluster
+    Kubernetes service DNS.
+    """
 
     timeout: float = 5.0
     max_retries: int = 2

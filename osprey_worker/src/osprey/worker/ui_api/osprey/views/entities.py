@@ -15,6 +15,7 @@ from osprey.worker.ui_api.osprey.lib.abilities import (
 from osprey.worker.ui_api.osprey.lib.auth import get_current_user, get_current_user_email
 
 from ..lib.marshal import marshal_with
+from ..singletons import CLICKHOUSE
 from ..validators.entities import (
     EventCountsByFeatureForEntityQuery,
     GetLabelsForEntityRequest,
@@ -58,7 +59,8 @@ def get_labels_for_entity(request_model: GetLabelsForEntityRequest) -> Any:
 @require_ability(CanViewEventsByEntity)
 def event_counts_by_feature_for_entity_query(request_model: EventCountsByFeatureForEntityQuery) -> Any:
     require_ability_with_request(request_model, CanViewEventsByEntity)
-    timeseries_result = request_model.execute()
+    backend = CLICKHOUSE.instance().backend
+    timeseries_result = request_model.execute(backend)
     return jsonify(timeseries_result[0]['result'])
 
 

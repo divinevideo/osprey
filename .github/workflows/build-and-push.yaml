@@ -30,6 +30,9 @@ jobs:
           - image: osprey-ui
             context: osprey_ui
             dockerfile: osprey_ui/Dockerfile
+          - image: osprey-divine-worker
+            context: .
+            dockerfile: divine/Dockerfile.worker
 
     steps:
       - uses: actions/checkout@v4
