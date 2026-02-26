@@ -18,6 +18,8 @@ from osprey.engine.query_language.ast_clickhouse_translator import ClickHouseQue
 from osprey.worker.lib.singletons import CONFIG, ENGINE
 from pydantic.main import BaseModel
 
+from .marshal import JsonBodyMarshaller
+
 if TYPE_CHECKING:
     from .abilities import QueryFilterAbility
 
@@ -145,7 +147,7 @@ def _build_where_clause(
     return ' AND '.join(parts)
 
 
-class BaseClickHouseQuery(BaseModel):
+class BaseClickHouseQuery(BaseModel, JsonBodyMarshaller):
     start: datetime
     end: datetime
     query_filter: str
@@ -357,3 +359,14 @@ def _granularity_to_clickhouse(granularity: str) -> str:
         return expr
     # Fallback: treat as interval duration string
     return f"toStartOfInterval(`__time`, INTERVAL 1 {granularity})"
+
+
+def parse_query_filter(query_filter: str) -> Optional[str]:
+    """Parse and validate a query filter string, returning a ClickHouse SQL WHERE clause."""
+    if query_filter == '':
+        return None
+
+    validated_sources = parse_query_to_validated_ast(
+        query_filter, rules_sources=ENGINE.instance().execution_graph.validated_sources
+    )
+    return ClickHouseQueryTransformer(validated_sources=validated_sources).transform()

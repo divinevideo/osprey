@@ -6,7 +6,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Generic, Optional, Set, Type, TypeVar, Union
 
 from flask import abort
-from osprey.worker.ui_api.osprey.lib.druid import BaseDruidQuery
+from osprey.worker.ui_api.osprey.lib.clickhouse import BaseClickHouseQuery as BaseDruidQuery  # noqa: N811 — alias for backward compat
 from osprey.worker.ui_api.osprey.validators.entities import (
     GetLabelsForEntityRequest,
     ManualEntityLabelMutationRequest,

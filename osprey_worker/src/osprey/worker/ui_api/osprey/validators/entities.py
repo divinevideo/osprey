@@ -4,7 +4,7 @@ from typing import List, Optional, Type
 from flask import Request
 from osprey.engine.language_types.entities import EntityT
 from osprey.worker.lib.osprey_shared.labels import LabelStatus
-from osprey.worker.ui_api.osprey.lib.druid import TimeseriesDruidQuery
+from osprey.worker.ui_api.osprey.lib.clickhouse import TimeseriesClickHouseQuery
 from osprey.worker.ui_api.osprey.lib.marshal import FlaskRequestMarshaller, T
 from pydantic import BaseModel
 
@@ -23,7 +23,7 @@ class GetLabelsForEntityRequest(BaseModel, EntityMarshaller):
     entity: EntityT[str]
 
 
-class EventCountsByFeatureForEntityQuery(TimeseriesDruidQuery, EntityMarshaller):
+class EventCountsByFeatureForEntityQuery(TimeseriesClickHouseQuery, EntityMarshaller):
     pass
 
 
