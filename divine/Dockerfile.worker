@@ -1,0 +1,10 @@
+# Divine worker — extends the base osprey worker with Divine plugins and rules
+# Build base first: docker build -t osprey-worker-base -f osprey_worker/Dockerfile .
+# Then: docker build -t osprey-worker-divine -f divine/Dockerfile.worker .
+
+FROM osprey-worker-base
+
+COPY divine/plugins /osprey/divine_plugins
+COPY divine/rules /osprey/divine_rules
+
+ENV OSPREY_PLUGIN_PATH=/osprey/divine_plugins/src
