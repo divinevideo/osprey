@@ -78,6 +78,7 @@ def export_all_actions(
         query_filter = f'ActionName == "{action_name}"'
 
     from osprey.worker.ui_api.osprey.singletons import CLICKHOUSE
+
     backend = CLICKHOUSE.instance().backend
 
     def query_clickhouse(next_page: Optional[str] = None) -> PaginatedScanResult:

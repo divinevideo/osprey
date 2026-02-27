@@ -93,7 +93,9 @@ def mock_clickhouse_client(fake_clickhouse: Any) -> Any:
         ),
     ],
 )
-def test_events_auth_reject_post(app: Flask, client: 'FlaskClient[Response]', model: BaseClickHouseQuery, url: str) -> None:
+def test_events_auth_reject_post(
+    app: Flask, client: 'FlaskClient[Response]', model: BaseClickHouseQuery, url: str
+) -> None:
     res = client.post(url_for(url), content_type='application/json', data=model.json())
     assert res.status_code == 401, res.data
 
