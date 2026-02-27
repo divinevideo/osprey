@@ -101,12 +101,12 @@ jobs:
       - name: Verify SML rules exist
         run: |
           test -f divine/rules/models/base.sml
-          test -f divine/rules/models/kind1_note.sml
-          test -f divine/rules/models/kind1984_report.sml
-          test -f divine/rules/models/video_event.sml
-          test -f divine/rules/rules/new_account_spam.sml
-          test -f divine/rules/rules/rapid_posting.sml
-          test -f divine/rules/rules/repeat_offender.sml
+          test -f divine/rules/models/nostr/kind1_note.sml
+          test -f divine/rules/models/nostr/kind1984_report.sml
+          test -f divine/rules/models/nostr/video_event.sml
+          test -f divine/rules/rules/behavioral/new_account_spam.sml
+          test -f divine/rules/rules/behavioral/rapid_posting.sml
+          test -f divine/rules/rules/behavioral/repeat_offender.sml
           test -f divine/rules/rules/reports/auto_hide.sml
           echo "All SML rules present"
 
