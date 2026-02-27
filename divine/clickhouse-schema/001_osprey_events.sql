@@ -42,9 +42,16 @@ PARTITION BY toYYYYMM(hour)
 ORDER BY (hour, rule_name)
 AS
 SELECT
-    toStartOfHour(__time) AS hour,
-    arrayJoin(JSONExtractKeysAndValues(__rule_hits, 'Bool')) AS kv,
-    kv.1 AS rule_name,
-    countIf(kv.2 = true) AS hit_count
-FROM osprey.osprey_events
+    hour,
+    rule_name,
+    count() AS hit_count
+FROM (
+    SELECT
+        toStartOfHour(__time) AS hour,
+        tupleElement(kv, 1) AS rule_name,
+        tupleElement(kv, 2) AS hit
+    FROM osprey.osprey_events
+    ARRAY JOIN JSONExtractKeysAndValues(__rule_hits, 'Bool') AS kv
+    WHERE hit = true
+)
 GROUP BY hour, rule_name;
