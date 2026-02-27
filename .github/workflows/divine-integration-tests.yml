@@ -26,7 +26,7 @@ jobs:
       - name: Start Divine stack (core services only)
         run: |
           docker compose -f divine/docker-compose.yaml up -d --build --wait \
-            kafka kafka-topic-creator clickhouse clickhouse-init etcd postgres
+            kafka kafka-topic-creator clickhouse etcd postgres
         timeout-minutes: 10
 
       - name: Wait for services to be healthy
