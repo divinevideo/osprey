@@ -23,9 +23,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Start Divine stack
+      - name: Start Divine stack (core services only)
         run: |
-          docker compose -f divine/docker-compose.yaml up -d --build --wait
+          docker compose -f divine/docker-compose.yaml up -d --build --wait \
+            kafka kafka-topic-creator clickhouse clickhouse-init etcd postgres
         timeout-minutes: 10
 
       - name: Wait for services to be healthy

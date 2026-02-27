@@ -67,7 +67,7 @@ def fake_clickhouse() -> Any:
 
 @pytest.fixture()
 def mock_clickhouse_client(fake_clickhouse: Any) -> Any:
-    with mock.patch('osprey.worker.ui_api.osprey.singletons.CLICKHOUSE') as magic_mock:
+    with mock.patch('osprey.worker.ui_api.osprey.views.events.CLICKHOUSE') as magic_mock:
         magic_mock.instance = mock.MagicMock(return_value=fake_clickhouse)
         yield
 
