@@ -1,0 +1,87 @@
+name: Divine Integration Tests
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  divine-integration-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Start Divine stack
+        run: |
+          docker compose -f divine/docker-compose.yaml up -d --build --wait
+        timeout-minutes: 10
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for ClickHouse..."
+          for i in $(seq 1 30); do
+            if docker compose -f divine/docker-compose.yaml exec -T clickhouse clickhouse-client --query "SELECT 1" 2>/dev/null; then
+              echo "ClickHouse ready"
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Waiting for Kafka..."
+          for i in $(seq 1 30); do
+            if docker compose -f divine/docker-compose.yaml exec -T kafka kafka-topics --bootstrap-server localhost:29092 --list 2>/dev/null; then
+              echo "Kafka ready"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Verify ClickHouse schema
+        run: |
+          docker compose -f divine/docker-compose.yaml exec -T clickhouse \
+            clickhouse-client --query "SHOW TABLES FROM osprey"
+
+      - name: Run smoke test — send sample events
+        run: |
+          # Send sample events to Kafka
+          for event in $(cat divine/example_data/sample_events.jsonl); do
+            docker compose -f divine/docker-compose.yaml exec -T kafka \
+              bash -c "echo '$event' | kafka-console-producer --bootstrap-server localhost:29092 --topic osprey.actions_input"
+          done
+
+          # Give worker time to process
+          sleep 10
+
+      - name: Check events landed in ClickHouse
+        run: |
+          docker compose -f divine/docker-compose.yaml exec -T clickhouse \
+            clickhouse-client --query "SELECT count() FROM osprey.osprey_events"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          docker compose -f divine/docker-compose.yaml logs > /tmp/divine-stack-logs.txt 2>&1
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: divine-stack-logs
+          path: /tmp/divine-stack-logs.txt
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f divine/docker-compose.yaml down -v
