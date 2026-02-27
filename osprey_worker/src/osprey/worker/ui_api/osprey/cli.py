@@ -16,14 +16,19 @@ from osprey.worker.lib.storage.stored_execution_result import (
 )
 from osprey.worker.lib.utils.json import CustomJSONEncoder
 from osprey.worker.ui_api.osprey.app import create_app
-from osprey.worker.ui_api.osprey.lib.druid import PaginatedScanDruidQuery, PaginatedScanResult
+from osprey.worker.ui_api.osprey.lib.clickhouse import PaginatedScanClickHouseQuery, PaginatedScanResult
 
 os.environ.update(
     BIGTABLE_EMULATOR_HOST='localhost:8361',
     DEBUG='true',
     FLASK_DEBUG='1',
     FLASK_ENV='development',
-    DRUID_URL='http://localhost:8082',
+    CLICKHOUSE_HOST='localhost',
+    CLICKHOUSE_PORT='8123',
+    CLICKHOUSE_USER='default',
+    CLICKHOUSE_PASSWORD='',
+    CLICKHOUSE_DATABASE='osprey',
+    CLICKHOUSE_TABLE='osprey_events',
     POSTGRES_HOSTS='{"osprey_db": "postgresql://localhost/osprey_db"}',
 )
 NOW = datetime.now()
@@ -50,8 +55,8 @@ def export_all_actions(
     query_filter: Optional[str],
 ) -> None:
     """
-    Queries druid for ids that match a given query or action name within a date range (default is last 24 hours).
-    The event are fetched from scylla and the raw events are dumped to the given output in the following newline
+    Queries ClickHouse for ids that match a given query or action name within a date range (default is last 24 hours).
+    The events are fetched from scylla and the raw events are dumped to the given output in the following newline
     delimited json:
 
         {"id": ID, "timestamp": TS, "action_data": {ACTION_DATA...}}
@@ -72,25 +77,29 @@ def export_all_actions(
     if action_name:
         query_filter = f'ActionName == "{action_name}"'
 
-    def query_druid(next_page: Optional[str] = None) -> PaginatedScanResult:
+    from osprey.worker.ui_api.osprey.singletons import CLICKHOUSE
+
+    backend = CLICKHOUSE.instance().backend
+
+    def query_clickhouse(next_page: Optional[str] = None) -> PaginatedScanResult:
         assert query_filter is not None
-        return PaginatedScanDruidQuery(
+        return PaginatedScanClickHouseQuery(
             start=start, end=end, query_filter=query_filter, next_page=next_page, entity=None
-        ).execute()
+        ).execute(backend)
 
     def row(event: StoredExecutionResult) -> Dict[str, str]:
         d = event.dict()
         return {'id': d['id'], 'timestamp': d['timestamp'], 'action_data': d['action_data']}
 
     storage_service = bootstrap_execution_result_storage_service()
-    druid_result = query_druid()
-    while druid_result.action_ids:
-        events = storage_service.get_many(action_ids=druid_result.action_ids)
+    ch_result = query_clickhouse()
+    while ch_result.action_ids:
+        events = storage_service.get_many(action_ids=ch_result.action_ids)
 
         for event in events:
             output.writelines([json.dumps(row(event), cls=CustomJSONEncoder), '\n'])
 
-        druid_result = query_druid(next_page=druid_result.next_page)
+        ch_result = query_clickhouse(next_page=ch_result.next_page)
 
 
 if __name__ == '__main__':

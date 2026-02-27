@@ -1,0 +1,5 @@
+{"id":"evt001","pubkey":"abc456def789","kind":1,"created_at":1709000000,"content":"hello world from divine","tags":[["p","def789"]],"sig":"deadbeef01"}
+{"id":"evt002","pubkey":"abc456def789","kind":1,"created_at":1709000060,"content":"another text note for testing","tags":[["e","evt001"],["p","fff000"]],"sig":"deadbeef02"}
+{"id":"evt003","pubkey":"reporter111","kind":1984,"created_at":1709000120,"content":"spam report","tags":[["p","spammer999"],["e","badpost123"],["l","spam","#l"]],"sig":"deadbeef03"}
+{"id":"evt004","pubkey":"creator222","kind":34235,"created_at":1709000180,"content":"","tags":[["d","my-video-1"],["title","Cool Video"],["url","https://divine.video/v/abc"],["thumb","https://divine.video/t/abc.jpg"],["duration","15"]],"sig":"deadbeef04"}
+{"id":"evt005","pubkey":"creator222","kind":34235,"created_at":1709000240,"content":"","tags":[["d","my-video-2"],["title","Another Video"],["url","https://divine.video/v/def"],["duration","30"]],"sig":"deadbeef05"}

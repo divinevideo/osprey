@@ -6,7 +6,7 @@ from osprey.engine.ast_validator.validation_context import ValidationFailed
 from osprey.worker.lib.storage.queries import Query, SortOrder
 
 from ..lib.auth import get_current_user_email
-from ..lib.druid import parse_query_filter
+from ..lib.clickhouse import parse_query_filter
 
 blueprint = Blueprint('queries', __name__)
 

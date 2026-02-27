@@ -1,0 +1,118 @@
+name: Divine Integration Tests
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CH_URL: "http://127.0.0.1:8123/?user=default&password=test"
+
+jobs:
+  divine-integration-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.3
+        ports:
+          - 8123:8123
+        env:
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+          CLICKHOUSE_PASSWORD: "test"
+        options: >-
+          --health-cmd "clickhouse-client --query 'SELECT 1' --password test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Apply ClickHouse schema
+        run: |
+          # Split SQL file into individual statements and execute each
+          # ClickHouse HTTP interface processes one statement per request
+          python3 -c "
+          import re, sys
+          with open('divine/clickhouse-schema/001_osprey_events.sql') as f:
+              sql = f.read()
+          # Remove comments
+          sql = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
+          # Split on semicolons, filter empty
+          stmts = [s.strip() for s in sql.split(';') if s.strip()]
+          for i, stmt in enumerate(stmts):
+              with open(f'/tmp/stmt_{i}.sql', 'w') as out:
+                  out.write(stmt)
+              print(f'Statement {i}: {stmt[:80]}...')
+          print(f'Total: {len(stmts)} statements')
+          "
+          for f in /tmp/stmt_*.sql; do
+            echo "Executing $f..."
+            # Show error body on failure for debugging
+            if ! curl -sf "$CH_URL" --data-binary @"$f"; then
+              echo "Failed. Server response:"
+              curl -s "$CH_URL" --data-binary @"$f"
+              exit 1
+            fi
+          done
+          echo "Schema applied successfully"
+
+      - name: Verify schema created
+        run: |
+          TABLES=$(curl -sf "$CH_URL" --data-binary "SHOW TABLES FROM osprey")
+          echo "Tables: $TABLES"
+          echo "$TABLES" | grep -q "osprey_events"
+
+      - name: Verify table structure
+        run: |
+          curl -sf "$CH_URL" --data-binary "DESCRIBE TABLE osprey.osprey_events"
+
+      - name: Insert test event
+        run: |
+          curl -sf "$CH_URL" \
+            --data-binary "INSERT INTO osprey.osprey_events (__time, __action_id, EventType, UserId, ActionName) VALUES (now(), 1001, 'nostr_kind1', 'npub1test', 'test_action')"
+
+      - name: Query test event
+        run: |
+          RESULT=$(curl -sf "$CH_URL" \
+            --data-binary "SELECT count() FROM osprey.osprey_events WHERE __action_id = 1001")
+          echo "Count: $RESULT"
+          [ "$RESULT" -eq 1 ] || (echo "Expected 1 row, got $RESULT" && exit 1)
+
+      - name: Verify Divine plugin files exist
+        run: |
+          test -f divine/plugins/src/register_plugins.py
+          test -f divine/plugins/src/udfs/ban_nostr_event.py
+          test -f divine/plugins/src/udfs/nostr_account_age.py
+          test -f divine/plugins/src/udfs/check_moderation_result.py
+          test -f divine/plugins/src/services/relay_manager_sink.py
+          test -f divine/plugins/src/services/zendesk_sink.py
+          echo "All plugin files present"
+
+      - name: Verify SML rules exist
+        run: |
+          test -f divine/rules/models/base.sml
+          test -f divine/rules/models/nostr/kind1_note.sml
+          test -f divine/rules/models/nostr/kind1984_report.sml
+          test -f divine/rules/models/nostr/video_event.sml
+          test -f divine/rules/rules/behavioral/new_account_spam.sml
+          test -f divine/rules/rules/behavioral/rapid_posting.sml
+          test -f divine/rules/rules/behavioral/repeat_offender.sml
+          test -f divine/rules/rules/reports/auto_hide.sml
+          echo "All SML rules present"
+
+      - name: Verify Nostr-Kafka bridge
+        run: |
+          test -f divine/nostr-kafka-bridge/main.py
+          test -f divine/nostr-kafka-bridge/requirements.txt
+          test -f divine/nostr-kafka-bridge/Dockerfile
+          echo "Bridge files present"

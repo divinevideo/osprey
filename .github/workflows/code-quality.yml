@@ -97,15 +97,18 @@ jobs:
         run: cargo fmt --check
         working-directory: osprey_coordinator
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+
       - name: Run Clippy linting
         run: cargo clippy -- -D warnings
         working-directory: osprey_coordinator
         continue-on-error: true
 
       - name: Build Rust project
-        run: |
-          sudo apt-get install protobuf-compiler
-          cargo build --verbose
+        run: cargo build --verbose
         working-directory: osprey_coordinator
 
       - name: Run Rust tests

@@ -1,10 +1,10 @@
 from datetime import datetime
 from typing import List, Optional
 
-from osprey.worker.ui_api.osprey.lib.druid import TopNDruidQuery
+from osprey.worker.ui_api.osprey.lib.clickhouse import TopNClickHouseQuery
 
 
-class BulkLabelTopNRequest(TopNDruidQuery):
+class BulkLabelTopNRequest(TopNClickHouseQuery):
     excluded_entities: List[str] = []
     expected_entities: int
     no_limit: bool
