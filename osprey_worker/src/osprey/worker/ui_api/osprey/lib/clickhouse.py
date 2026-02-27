@@ -100,7 +100,7 @@ class ClickHouseQueryBackend:
     def full_table(self) -> str:
         return f'{self.database}.{self.table}'
 
-    def query(self, sql: str, params: Optional[dict] = None) -> List[Dict[str, Any]]:
+    def query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Execute a query and return rows as list of dicts."""
         result = self.client.query(sql, parameters=params or {})
         columns = result.column_names

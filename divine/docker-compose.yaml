@@ -192,8 +192,7 @@ services:
   # ── Nostr → Kafka Bridge ────────────────────────────────────────────
   nostr-kafka-bridge:
     build:
-      context: ..
-      dockerfile: divine/nostr-kafka-bridge/Dockerfile
+      context: ./nostr-kafka-bridge
     hostname: nostr-kafka-bridge
     container_name: divine-bridge
     depends_on:

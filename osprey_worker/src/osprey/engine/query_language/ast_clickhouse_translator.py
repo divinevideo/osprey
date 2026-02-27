@@ -242,7 +242,4 @@ def _druid_filter_to_sql(druid_filter: dict[str, Any]) -> str:
         return f'{_quote_identifier(dims[0])} = {_quote_identifier(dims[1])}'
 
     else:
-        raise ClickHouseQueryTransformException(
-            grammar.Name(identifier='UDF'),
-            f'Cannot convert Druid filter type "{ftype}" to ClickHouse SQL',
-        )
+        raise ValueError(f'Cannot convert Druid filter type "{ftype}" to ClickHouse SQL')

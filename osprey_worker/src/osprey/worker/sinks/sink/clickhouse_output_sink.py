@@ -60,10 +60,10 @@ class ClickHouseOutputSink(BaseOutputSink):
             if result.verdicts:
                 row['__verdicts'] = json.dumps([v.value if hasattr(v, 'value') else str(v) for v in result.verdicts])
 
-            # Add rule hit info
-            if result.rule_results:
+            # Add rule hit info from validator_results
+            if result.validator_results:
                 row['__rule_hits'] = json.dumps(
-                    {name: bool(val) for name, val in result.rule_results.items() if val is not None}
+                    {name: bool(val) for name, val in result.validator_results.items() if val is not None}
                 )
 
             self._buffer.append(row)
