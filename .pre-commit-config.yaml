@@ -41,7 +41,7 @@ repos:
               .*_pb2_grpc\.py$|
               .*/tests/.*|
               .*/test_.*\.py$|
-              divine/nostr-kafka-bridge/.*
+              divine/.*
           )$
 
   # React/TypeScript formatting for osprey_ui
