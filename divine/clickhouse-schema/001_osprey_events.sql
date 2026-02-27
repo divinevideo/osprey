@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(__time)
 ORDER BY (__time, __action_id)
-TTL __time + INTERVAL 90 DAY
+TTL toDateTime(__time) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)

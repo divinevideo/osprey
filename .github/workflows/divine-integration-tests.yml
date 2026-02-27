@@ -56,17 +56,15 @@ jobs:
           print(f'Total: {len(stmts)} statements')
           "
           for f in /tmp/stmt_*.sql; do
-            echo "=== Executing $f ==="
-            cat "$f"
-            echo "---"
-            HTTP_CODE=$(curl -s -o /tmp/ch_response.txt -w "%{http_code}" "$CH_URL" --data-binary @"$f")
-            cat /tmp/ch_response.txt
-            if [ "$HTTP_CODE" != "200" ]; then
-              echo "FAILED with HTTP $HTTP_CODE"
+            echo "Executing $f..."
+            # Show error body on failure for debugging
+            if ! curl -sf "$CH_URL" --data-binary @"$f"; then
+              echo "Failed. Server response:"
+              curl -s "$CH_URL" --data-binary @"$f"
               exit 1
             fi
-            echo " OK"
           done
+          echo "Schema applied successfully"
 
       - name: Verify schema created
         run: |
