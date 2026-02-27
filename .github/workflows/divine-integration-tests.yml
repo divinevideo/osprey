@@ -56,8 +56,15 @@ jobs:
           print(f'Total: {len(stmts)} statements')
           "
           for f in /tmp/stmt_*.sql; do
-            echo "Executing $f..."
-            curl -sf "$CH_URL" --data-binary @"$f"
+            echo "=== Executing $f ==="
+            cat "$f"
+            echo "---"
+            HTTP_CODE=$(curl -s -o /tmp/ch_response.txt -w "%{http_code}" "$CH_URL" --data-binary @"$f")
+            cat /tmp/ch_response.txt
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "FAILED with HTTP $HTTP_CODE"
+              exit 1
+            fi
             echo " OK"
           done
 
