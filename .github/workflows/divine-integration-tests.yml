@@ -11,6 +11,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CH_URL: "http://127.0.0.1:8123/?user=default&password=test"
+
 jobs:
   divine-integration-tests:
     runs-on: ubuntu-24.04
@@ -36,28 +39,47 @@ jobs:
 
       - name: Apply ClickHouse schema
         run: |
-          curl -sf "http://127.0.0.1:8123/?user=default&password=test" \
-            --data-binary @divine/clickhouse-schema/001_osprey_events.sql
+          # Split SQL file into individual statements and execute each
+          # ClickHouse HTTP interface processes one statement per request
+          python3 -c "
+          import re, sys
+          with open('divine/clickhouse-schema/001_osprey_events.sql') as f:
+              sql = f.read()
+          # Remove comments
+          sql = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
+          # Split on semicolons, filter empty
+          stmts = [s.strip() for s in sql.split(';') if s.strip()]
+          for i, stmt in enumerate(stmts):
+              with open(f'/tmp/stmt_{i}.sql', 'w') as out:
+                  out.write(stmt)
+              print(f'Statement {i}: {stmt[:80]}...')
+          print(f'Total: {len(stmts)} statements')
+          "
+          for f in /tmp/stmt_*.sql; do
+            echo "Executing $f..."
+            curl -sf "$CH_URL" --data-binary @"$f"
+            echo " OK"
+          done
 
       - name: Verify schema created
         run: |
-          curl -sf "http://127.0.0.1:8123/?user=default&password=test" \
-            --data-binary "SHOW TABLES FROM osprey"
+          TABLES=$(curl -sf "$CH_URL" --data-binary "SHOW TABLES FROM osprey")
+          echo "Tables: $TABLES"
+          echo "$TABLES" | grep -q "osprey_events"
 
       - name: Verify table structure
         run: |
-          curl -sf "http://127.0.0.1:8123/?user=default&password=test" \
-            --data-binary "DESCRIBE TABLE osprey.osprey_events"
+          curl -sf "$CH_URL" --data-binary "DESCRIBE TABLE osprey.osprey_events"
 
       - name: Insert test event
         run: |
-          curl -sf "http://127.0.0.1:8123/?user=default&password=test" \
-            --data-binary "INSERT INTO osprey.osprey_events (__time, __action_id, EventType, UserId, ActionName) VALUES (now(), 'test-001', 'nostr_kind1', 'npub1test', 'test_action')"
+          curl -sf "$CH_URL" \
+            --data-binary "INSERT INTO osprey.osprey_events (__time, __action_id, EventType, UserId, ActionName) VALUES (now(), 1001, 'nostr_kind1', 'npub1test', 'test_action')"
 
       - name: Query test event
         run: |
-          RESULT=$(curl -sf "http://127.0.0.1:8123/?user=default&password=test" \
-            --data-binary "SELECT count() FROM osprey.osprey_events WHERE __action_id = 'test-001'")
+          RESULT=$(curl -sf "$CH_URL" \
+            --data-binary "SELECT count() FROM osprey.osprey_events WHERE __action_id = 1001")
           echo "Count: $RESULT"
           [ "$RESULT" -eq 1 ] || (echo "Expected 1 row, got $RESULT" && exit 1)
 
