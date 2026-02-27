@@ -3,7 +3,9 @@ from osprey.worker.lib.singleton import Singleton
 from osprey.worker.lib.singletons import CONFIG
 
 from .lib.clickhouse_client_holder import ClickHouseClientHolder
+from .lib.druid_client_holder import DruidClientHolder
 
+DRUID: Singleton[DruidClientHolder] = Singleton(DruidClientHolder)
 CLICKHOUSE: Singleton[ClickHouseClientHolder] = Singleton(ClickHouseClientHolder)
 
 
