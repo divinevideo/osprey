@@ -10,23 +10,23 @@ Pubkey: Entity[str] = EntityJson(
   coerce_type=True
 )
 
-Kind: int = Json(
+Kind: int = JsonData(
   path='$.kind',
   coerce_type=True
 )
 
-CreatedAt: int = Json(
+CreatedAt: int = JsonData(
   path='$.created_at',
   coerce_type=True
 )
 
-Content: str = Json(
+Content: str = JsonData(
   path='$.content',
   coerce_type=True,
   optional=True
 )
 
-Tags: list = Json(
+Tags: list = JsonData(
   path='$.tags',
   coerce_type=True,
   optional=True

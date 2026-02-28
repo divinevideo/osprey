@@ -1,11 +1,11 @@
 Import(rules=['models/base.sml'])
 
-NoteText: str = Json(
+NoteText: str = JsonData(
   path='$.content',
   coerce_type=True
 )
 
-MentionedPubkeys: list = Json(
+MentionedPubkeys: list = JsonData(
   path='$.mentioned_pubkeys',
   coerce_type=True,
   optional=True

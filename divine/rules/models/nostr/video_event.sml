@@ -1,18 +1,18 @@
 Import(rules=['models/base.sml'])
 
-VideoUrl: str = Json(
+VideoUrl: str = JsonData(
   path='$.video_url',
   coerce_type=True,
   optional=True
 )
 
-VideoHash: str = Json(
+VideoHash: str = JsonData(
   path='$.video_hash',
   coerce_type=True,
   optional=True
 )
 
-VideoTitle: str = Json(
+VideoTitle: str = JsonData(
   path='$.video_title',
   coerce_type=True,
   optional=True
