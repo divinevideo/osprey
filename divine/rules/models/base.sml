@@ -23,13 +23,13 @@ CreatedAt: int = JsonData(
 Content: str = JsonData(
   path='$.content',
   coerce_type=True,
-  optional=True
+  required=False
 )
 
 Tags: list = JsonData(
   path='$.tags',
   coerce_type=True,
-  optional=True
+  required=False
 )
 
 ActionName=GetActionName()

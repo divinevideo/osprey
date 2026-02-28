@@ -64,6 +64,9 @@ COPY entrypoint.sh /osprey/entrypoint.sh
 COPY divine/plugins /osprey/divine_plugins
 COPY divine/rules /osprey/divine_rules
 
+# Install divine plugins so pluggy discovers them via entrypoints
+RUN . .venv/bin/activate && pip install -e /osprey/divine_plugins
+
 ENV OSPREY_PLUGIN_PATH=/osprey/divine_plugins/src
 
 ENTRYPOINT ["/osprey/entrypoint.sh"]

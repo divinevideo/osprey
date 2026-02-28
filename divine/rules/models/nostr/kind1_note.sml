@@ -8,5 +8,5 @@ NoteText: str = JsonData(
 MentionedPubkeys: list = JsonData(
   path='$.mentioned_pubkeys',
   coerce_type=True,
-  optional=True
+  required=False
 )
