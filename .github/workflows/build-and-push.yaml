@@ -3,6 +3,7 @@ name: Build and Push Docker Images
 on:
   push:
     branches:
+      - main
       - 'divine/*'
     tags:
       - 'v*'
@@ -33,6 +34,9 @@ jobs:
           - image: osprey-divine-worker
             context: .
             dockerfile: divine/Dockerfile.worker
+          - image: osprey-nostr-bridge
+            context: divine/nostr-kafka-bridge
+            dockerfile: divine/nostr-kafka-bridge/Dockerfile
 
     steps:
       - uses: actions/checkout@v4
