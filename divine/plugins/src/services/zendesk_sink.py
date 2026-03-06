@@ -7,6 +7,25 @@ from osprey.worker.sinks.sink.output_sink import BaseOutputSink
 
 logger = get_logger(__name__)
 
+# REVIEW NOTE (matt, 2026-03-06):
+#
+# Divine's Zendesk is at rabblelabs.zendesk.com. Auth is email/token
+# (not OAuth). The existing relay-manager Zendesk integration uses a
+# bi-directional sync pattern:
+#   - Incoming: Zendesk webhook creates GitHub issues for Problem tickets
+#   - Outgoing: moderation actions resolve matching Zendesk tickets
+#
+# For Osprey, the Zendesk sink should probably:
+#   1. Only create tickets for verdicts that need human follow-up
+#      (flag_for_review, escalations). Auto-bans don't need tickets.
+#   2. Resolve existing tickets when a verdict closes an open report.
+#      relay-manager's syncZendeskAfterAction() has the resolution logic.
+#   3. Use Zendesk Problem/Incident ticket pattern (one Problem per
+#      reported user/content, incidents linked to it).
+#
+# Not every verdict should create a ticket. will_do_work() currently
+# fires on any verdict, which would flood Zendesk with SAFE results.
+
 DEFAULT_ZENDESK_URL = 'https://example.zendesk.com'
 
 
