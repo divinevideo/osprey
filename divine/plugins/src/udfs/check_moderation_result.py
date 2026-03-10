@@ -86,7 +86,7 @@ class CheckModerationResult(UDFBase[CheckModerationResultArguments, str]):
             # If still full after expiry sweep, clear half
             if len(_cache) >= _CACHE_MAX_SIZE:
                 keys = list(_cache.keys())
-                for k in keys[:len(keys) // 2]:
+                for k in keys[: len(keys) // 2]:
                     del _cache[k]
 
         _cache[video_hash] = (result, now + _CACHE_TTL)

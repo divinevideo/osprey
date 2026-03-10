@@ -78,11 +78,7 @@ class ZendeskSink(BaseOutputSink):
             'ticket': {
                 'subject': f'Osprey: {verdict} - content flagged for review',
                 'comment': {
-                    'body': (
-                        f'Automated moderation verdict: {verdict}\n\n'
-                        f'Action: {action_name}\n'
-                        f'Features: {features}'
-                    ),
+                    'body': (f'Automated moderation verdict: {verdict}\n\nAction: {action_name}\nFeatures: {features}'),
                 },
                 'type': 'problem',
                 'priority': 'high' if verdict == 'restrict' else 'normal',
