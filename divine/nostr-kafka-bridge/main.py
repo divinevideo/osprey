@@ -87,6 +87,13 @@ def _wrap_nostr_event(event: dict) -> dict:
     if p_tags:
         data['mentioned_pubkeys'] = p_tags
 
+    # Extract video hash from x-tag (for kind 34235/34236 video events)
+    if kind in (34235, 34236):
+        for t in tags:
+            if isinstance(t, list) and len(t) >= 2 and t[0] == 'x':
+                data['video_hash'] = t[1]
+                break
+
     # Extract report-specific fields for kind 1984 (NIP-56 moderation reports)
     if kind == 1984:
         e_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == 'e']

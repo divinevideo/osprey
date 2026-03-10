@@ -25,7 +25,7 @@ Import(
 AgeRestricted = Rule(
   when_all=[
     Kind in [34235, 34236],
-    CheckModerationResult(event_id=EventId) == 'age_restricted',
+    CheckModerationResult(video_hash=VideoHash) == 'age_restricted',
     not HasLabel(entity=EventId, label='human_reviewed'),
   ],
   description='AI classified video as age-restricted',
@@ -45,7 +45,7 @@ WhenRules(
 NeedsReview = Rule(
   when_all=[
     Kind in [34235, 34236],
-    CheckModerationResult(event_id=EventId) == 'review',
+    CheckModerationResult(video_hash=VideoHash) == 'review',
     not HasLabel(entity=EventId, label='human_reviewed'),
   ],
   description='AI classified video as needing human review',
@@ -64,7 +64,7 @@ WhenRules(
 PermanentBan = Rule(
   when_all=[
     Kind in [34235, 34236],
-    CheckModerationResult(event_id=EventId) == 'permanent_ban',
+    CheckModerationResult(video_hash=VideoHash) == 'permanent_ban',
   ],
   description='AI classified video for permanent ban',
 )
