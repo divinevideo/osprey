@@ -56,14 +56,14 @@ class ZendeskSink(BaseOutputSink):
         if not self._url:
             return False
         for verdict in result.verdicts:
-            v = str(verdict).lower()
+            v = verdict.verdict.lower()
             if v in TICKETABLE_VERDICTS or v in RESOLUTION_VERDICTS:
                 return True
         return False
 
     def push(self, result: ExecutionResult) -> None:
         for verdict in result.verdicts:
-            v = str(verdict).lower()
+            v = verdict.verdict.lower()
             if v in TICKETABLE_VERDICTS:
                 self._create_ticket(v, result)
             elif v in RESOLUTION_VERDICTS:
@@ -72,14 +72,15 @@ class ZendeskSink(BaseOutputSink):
     def _create_ticket(self, verdict: str, result: ExecutionResult) -> None:
         """Create a Zendesk Problem ticket for content needing human review."""
         features = result.extracted_features_json or '{}'
+        action_name = result.action.action_name if result.action else 'unknown'
 
         ticket_data: Dict[str, Any] = {
             'ticket': {
-                'subject': f'Osprey: {verdict} — content flagged for review',
+                'subject': f'Osprey: {verdict} - content flagged for review',
                 'comment': {
                     'body': (
                         f'Automated moderation verdict: {verdict}\n\n'
-                        f'Rule: {result.rule_name}\n'
+                        f'Action: {action_name}\n'
                         f'Features: {features}'
                     ),
                 },
@@ -90,7 +91,7 @@ class ZendeskSink(BaseOutputSink):
         }
 
         if not self._enabled:
-            logger.info(f'[dry-run] Would create ticket: verdict={verdict} rule={result.rule_name}')
+            logger.info(f'[dry-run] Would create ticket: verdict={verdict} action={action_name}')
             return
 
         try:
@@ -114,7 +115,8 @@ class ZendeskSink(BaseOutputSink):
         Not implemented yet -- would need to match the relay-manager
         pattern (zendesk_tickets D1 table maps event_id to ticket_id).
         """
-        logger.info(f'Resolution verdict: {verdict} rule={result.rule_name} (ticket resolution not yet implemented)')
+        action_name = result.action.action_name if result.action else 'unknown'
+        logger.info(f'Resolution verdict: {verdict} action={action_name} (ticket resolution not yet implemented)')
 
     def stop(self) -> None:
         pass
