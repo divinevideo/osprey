@@ -94,6 +94,35 @@ def _wrap_nostr_event(event: dict) -> dict:
                 data['video_hash'] = t[1]
                 break
 
+    # Extract label fields for kind 1985 (NIP-32 label events)
+    if kind == 1985:
+        for t in tags:
+            if isinstance(t, list) and len(t) >= 2:
+                if t[0] == 'L':
+                    data['label_namespace'] = t[1]
+                elif t[0] == 'l' and len(t) >= 3:
+                    data['label_value'] = t[1]
+                    # Parse metadata from 4th element if present
+                    if len(t) >= 4:
+                        try:
+                            meta = json.loads(t[3])
+                            data['label_metadata'] = t[3]
+                            if isinstance(meta, dict):
+                                if 'confidence' in meta:
+                                    data['label_confidence'] = float(meta['confidence'])
+                                if 'source' in meta:
+                                    data['label_source'] = meta['source']
+                                if meta.get('rejected'):
+                                    data['label_rejected'] = True
+                                if 'sha256' in meta:
+                                    data['label_content_hash'] = meta['sha256']
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            data['label_metadata'] = t[3]
+                elif t[0] == 'e':
+                    data['label_target_event'] = t[1]
+                elif t[0] == 'x':
+                    data['label_content_hash'] = t[1]
+
     # Extract report-specific fields for kind 1984 (NIP-56 moderation reports)
     if kind == 1984:
         e_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == 'e']
