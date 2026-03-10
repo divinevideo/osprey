@@ -176,6 +176,7 @@ services:
       - OSPREY_PLUGIN_PATH=/osprey/divine_plugins/src
       - OSPREY_RULES_PATH=/osprey/divine_rules
       - DIVINE_RELAY_MANAGER_URL=http://host.docker.internal:5000
+      - DIVINE_RELAY_MANAGER_API_KEY=
       - OSPREY_RULES_SINK_NUM_WORKERS=1
       - SNOWFLAKE_API_ENDPOINT=http://snowflake-id-worker:8088
       - DD_TRACE_ENABLED=False
