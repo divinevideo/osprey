@@ -70,7 +70,9 @@ class ClickHouseOutputSink(BaseOutputSink):
             # Persist entity label mutations from features
             label_mutations = features.get('__entity_label_mutations')
             if label_mutations:
-                row['__entity_label_mutations'] = json.dumps(label_mutations) if isinstance(label_mutations, list) else str(label_mutations)
+                row['__entity_label_mutations'] = (
+                    json.dumps(label_mutations) if isinstance(label_mutations, list) else str(label_mutations)
+                )
 
             # Add verdict info if present
             if result.verdicts:
@@ -79,8 +81,11 @@ class ClickHouseOutputSink(BaseOutputSink):
             # Add rule hit info from validator_results
             if result.validator_results:
                 row['__rule_hits'] = json.dumps(
-                    {str(getattr(name, '__name__', name)): bool(val)
-                     for name, val in result.validator_results.items() if val is not None}
+                    {
+                        str(getattr(name, '__name__', name)): bool(val)
+                        for name, val in result.validator_results.items()
+                        if val is not None
+                    }
                 )
 
             self._buffer.append(row)

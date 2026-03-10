@@ -206,9 +206,12 @@ async def bridge():
                         producer.send(KAFKA_TOPIC, value=wrapped)
                         event_count += 1
                         if event_count % 100 == 1:
-                            log.info('Published %d events (latest: kind %s id %s)',
-                                     event_count, event.get('kind', '?'),
-                                     event.get('id', '?')[:12])
+                            log.info(
+                                'Published %d events (latest: kind %s id %s)',
+                                event_count,
+                                event.get('kind', '?'),
+                                event.get('id', '?')[:12],
+                            )
                         else:
                             log.debug('Published event %s', event.get('id', '?')[:12])
 
