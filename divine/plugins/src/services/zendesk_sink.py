@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import requests
 from osprey.engine.executor.execution_context import ExecutionResult
