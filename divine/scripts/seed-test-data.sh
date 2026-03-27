@@ -139,16 +139,20 @@ SPAM_VIDEO_ID=$($NAK event --sec "$SPAMMER_NSEC" -k 34235 \
 echo "  Spam video event: ${SPAM_VIDEO_ID:0:16}..."
 
 # --- 3. Trusted reporter files CSAM report (should trigger auto_hide + ban) ---
+# Uses divine-mobile tag format: reason in 3rd element of e/p tags
 echo ""
 echo "--- Test 3: Trusted reporter CSAM report (TrustedReporterCSAM -> auto_hide) ---"
 $NAK event --sec "$REPORTER_NSEC" -k 1984 \
-    -c '{"type":"csam","description":"Suspected CSAM content"}' \
-    -e "$SPAM_VIDEO_ID" \
-    -p "$SPAMMER_PUB" \
-    -t "report=csam" \
+    -c 'CONTENT REPORT - NIP-56
+Reason: csam
+Reported via Divine for community safety' \
+    -t "e=$SPAM_VIDEO_ID;illegal" \
+    -t "p=$SPAMMER_PUB;illegal" \
+    -t "client=diVine" \
     "$RELAY" 2>&1 | grep -o "success\|failed.*"
 
 # --- 4. Trusted reporter files NSFW report (should trigger flag_for_review) ---
+# Uses divine-mobile tag format
 echo ""
 echo "--- Test 4: Trusted reporter NSFW report (TrustedReporterNSFW -> flag_for_review) ---"
 NSFW_VIDEO_ID=$($NAK event --sec "$SPAMMER_NSEC" -k 34235 \
@@ -162,10 +166,12 @@ NSFW_VIDEO_ID=$($NAK event --sec "$SPAMMER_NSEC" -k 34235 \
     2>/dev/null | jq -r '.id')
 
 $NAK event --sec "$REPORTER_NSEC" -k 1984 \
-    -c '{"type":"nudity","description":"Contains nudity"}' \
-    -e "$NSFW_VIDEO_ID" \
-    -p "$SPAMMER_PUB" \
-    -t "report=nudity" \
+    -c 'CONTENT REPORT - NIP-56
+Reason: nudity
+Reported via Divine for community safety' \
+    -t "e=$NSFW_VIDEO_ID;nudity" \
+    -t "p=$SPAMMER_PUB;nudity" \
+    -t "client=diVine" \
     "$RELAY" 2>&1 | grep -o "success\|failed.*"
 
 # --- 5. Moderator confirms nudity via kind 1985 label ---
