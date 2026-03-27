@@ -112,8 +112,7 @@ def _wrap_nostr_event(event: dict) -> dict:
                                     data['label_confidence'] = float(meta['confidence'])
                                 if 'source' in meta:
                                     data['label_source'] = meta['source']
-                                if meta.get('rejected'):
-                                    data['label_rejected'] = True
+                                data['label_rejected'] = bool(meta.get('rejected', False))
                                 if 'sha256' in meta:
                                     data['label_content_hash'] = meta['sha256']
                         except (json.JSONDecodeError, TypeError, ValueError):

@@ -56,14 +56,17 @@ class ClickHouseOutputSink(BaseOutputSink):
                 '__action_id': result.action.action_id,
             }
 
-            # Add features, skipping internal __ fields already handled above
+            # Add features, skipping internal __ fields already handled above.
+            # Skip None values — ClickHouse will use column defaults.
             for key, val in features.items():
                 if key.startswith('__'):
                     continue
+                if val is None:
+                    continue
                 if isinstance(val, (list, dict)):
                     row[key] = json.dumps(val)
-                elif val is None:
-                    row[key] = ''
+                elif isinstance(val, bool):
+                    row[key] = int(val)
                 else:
                     row[key] = val
 
