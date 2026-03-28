@@ -1,15 +1,52 @@
 # Divine Osprey — local development stack
 # Uses Kind cluster's ClickHouse and Funnelcake relay
 #
-# Prerequisites:
-#   cd ~/code/divine-relay-test
-#   bash scripts/setup-cluster.sh
-#   bash scripts/relays/setup-funnelcake.sh
+# Setup (one-time):
+#   1. Start Kind cluster with Funnelcake:
+#        cd ~/code/divine-relay-test
+#        bash scripts/setup-cluster.sh
+#        bash scripts/relays/setup-funnelcake.sh
+#      If the migration job times out, deploy manually:
+#        kubectl apply -f k8s/funnelcake-deployment.yaml
 #
-# Usage:
-#   cd divine && docker compose up -d
-#   # ClickHouse schema init (if first run):
-#   ./scripts/init-clickhouse.sh
+#   2. Init ClickHouse schema (Kind's ClickHouse requires auth):
+#        cd ~/code/osprey/divine
+#        python3 -c "
+#        import urllib.request, sys
+#        sql = open('clickhouse-schema/001_osprey_events.sql').read()
+#        for i, part in enumerate(sql.split('CREATE ')):
+#            if i == 0: continue
+#            stmt = 'CREATE ' + part.strip().rstrip(';')
+#            req = urllib.request.Request(
+#                'http://localhost:8123/?user=default&password=clickhouse',
+#                data=stmt.encode())
+#            try:
+#                urllib.request.urlopen(req)
+#                print(f'Statement {i}: OK')
+#            except Exception as e:
+#                print(f'Statement {i}: {e.read().decode()[:200] if hasattr(e,\"read\") else e}')
+#        "
+#
+#   3. Start Osprey:
+#        cd ~/code/osprey/divine
+#        docker compose up -d
+#
+#   4. Seed test data:
+#        bash scripts/seed-test-data.sh
+#
+# Enforcement test (optional):
+#   Requires relay-manager running on Wrangler:
+#     cd ~/code/divine-relay-manager/worker
+#     # Add to .dev.vars: ADMIN_API_KEY=osprey-local-dev-key
+#     npx wrangler dev --config wrangler.local.toml
+#   Then set DIVINE_RELAY_MANAGER_URL and DIVINE_RELAY_MANAGER_API_KEY below
+#   to match, and recreate the worker: docker compose up -d osprey-worker
+#
+# Verify:
+#   docker compose logs osprey-worker --tail 20    # rule verdicts
+#   curl -s 'http://localhost:8123/?user=default&password=clickhouse' \
+#     --data 'SELECT Kind, __verdicts FROM osprey.osprey_events FORMAT Pretty'
+#   http://localhost:5002                           # Osprey UI
 
 volumes:
   metadata_data: {}
@@ -157,8 +194,8 @@ services:
       # Plugins & rules
       - OSPREY_PLUGIN_PATH=/osprey/divine_plugins/src
       - OSPREY_RULES_PATH=/osprey/divine_rules
-      - DIVINE_RELAY_MANAGER_URL=
-      - DIVINE_RELAY_MANAGER_API_KEY=
+      - DIVINE_RELAY_MANAGER_URL=http://host.docker.internal:8787
+      - DIVINE_RELAY_MANAGER_API_KEY=osprey-local-dev-key
       - DIVINE_MODERATION_API_URL=https://moderation-api.divine.video
       - OSPREY_RULES_SINK_NUM_WORKERS=1
       - SNOWFLAKE_API_ENDPOINT=http://snowflake-id-worker:8088
