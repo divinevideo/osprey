@@ -148,7 +148,7 @@ def scan_query(request_model: PaginatedScanClickHouseQuery) -> Any:
 
         ids_str = ', '.join(str(aid) for aid in paginated_scan_results.action_ids)
         rows = backend.query(f'SELECT * FROM {backend.full_table} WHERE `__action_id` IN ({ids_str})')
-        events = []
+        events: list[dict[str, object]] = []
         for row in rows:
             features = {k: v for k, v in row.items() if not k.startswith('__')}
             events.append(
