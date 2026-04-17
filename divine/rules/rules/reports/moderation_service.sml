@@ -19,6 +19,13 @@
 # This path is one of two for moderation-service output into Osprey:
 #   - Kind 1984 (this file): automated AI signal, routes to human review
 #   - Kind 1985 (content/label_routing.sml): human-verified decisions, enforces
+#
+# Naming note: the rule is still called `ModerationServiceBan` to match the
+# existing `ModerationServiceBan` column in the `osprey.osprey_events`
+# ClickHouse schema. Rule names become ClickHouse columns, so renaming the
+# rule without a coordinated ALTER TABLE breaks every output sink flush.
+# The semantics have changed (signal-only, no ban) but the name stays until
+# we land a paired iac-coreconfig column rename.
 
 Import(
   rules=[
@@ -27,17 +34,17 @@ Import(
   ]
 )
 
-ModerationServiceFlag = Rule(
+ModerationServiceBan = Rule(
   when_all=[
     Kind == 1984,
     HasLabel(entity=Pubkey, label='moderation_service'),
     ReportReason in ['nudity', 'violence', 'ai_generated'],
   ],
-  description='Divine moderation service flagged content for human review',
+  description='Divine moderation service flagged content for human review (signal only, name retained for ClickHouse schema compatibility)',
 )
 
 WhenRules(
-  rules_any=[ModerationServiceFlag],
+  rules_any=[ModerationServiceBan],
   then=[
     LabelAdd(entity=EventId, label='ai_classified'),
     DeclareVerdict(verdict='flag_for_review'),
