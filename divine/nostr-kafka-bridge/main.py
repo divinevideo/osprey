@@ -30,7 +30,8 @@ connected = False
 # Divine clients use different reason vocabularies. Normalize to canonical
 # values that SML rules can match consistently.
 #
-# Canonical values: csam, nudity, spam, impersonation, illegal, harassment, other
+# Canonical values: csam, nudity, violence, ai_generated, spam, impersonation,
+# illegal, harassment, other
 # Mobile maps csam -> 'illegal' and sexual content -> 'nudity' per NIP-56.
 # Web passes raw reasons (csam, harassment, sexual-content, etc.).
 _REASON_ALIASES = {
