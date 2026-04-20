@@ -2,7 +2,8 @@
 # Automatically acts on reports from trusted reporters for CSAM and NSFW content.
 #
 # Report reasons are normalized by the bridge. Canonical values:
-#   csam, nudity, spam, impersonation, illegal, harassment, other
+#   csam, nudity, violence, ai_generated, spam, impersonation, illegal,
+#   harassment, other
 #
 # Mobile sends 'illegal' for CSAM (NIP-56 mapping), which the bridge
 # can't distinguish from violence/copyright 'illegal'. We match both

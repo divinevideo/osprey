@@ -105,11 +105,31 @@ class ZendeskSink(BaseOutputSink):
             logger.exception(f'Failed to create Zendesk ticket for verdict={verdict}')
 
     def _log_resolution(self, verdict: str, result: ExecutionResult) -> None:
-        """Log resolution verdicts. Resolving existing tickets requires
-        searching by event ID, which needs the Zendesk search API and
-        a tag/field convention for linking tickets to Nostr events.
-        Not implemented yet -- would need to match the relay-manager
-        pattern (zendesk_tickets D1 table maps event_id to ticket_id).
+        """Log resolution verdicts. Ticket resolution is not yet implemented.
+
+        Architecture for when this is needed:
+        ----------------------------------------
+        Closing tickets requires mapping Nostr event IDs to Zendesk ticket IDs.
+        The relay-manager solves this with a `zendesk_tickets` D1 table
+        (event_id -> ticket_id). Osprey runs in GKE, not CF Workers, so the
+        equivalent is a Postgres table in the osprey DB:
+
+            CREATE TABLE zendesk_tickets (
+                event_id TEXT PRIMARY KEY,
+                ticket_id INTEGER NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now()
+            );
+
+        Implementation steps:
+        1. In `_create_ticket`: after a successful API call, INSERT into
+           zendesk_tickets (event_id from result, ticket_id from response).
+        2. In `_log_resolution`: SELECT ticket_id WHERE event_id = <event_id>,
+           then PATCH /api/v2/tickets/{ticket_id}.json with status='solved'.
+        3. Inject the DB connection via __init__ (same pattern as
+           PostgresLabelsService in labels_service.py).
+
+        For now, log and continue. Tickets accumulate but cause no operational
+        harm -- moderators can close them manually.
         """
         action_name = result.action.action_name if result.action else 'unknown'
         logger.info(f'Resolution verdict: {verdict} action={action_name} (ticket resolution not yet implemented)')

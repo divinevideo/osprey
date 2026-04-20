@@ -30,7 +30,8 @@ connected = False
 # Divine clients use different reason vocabularies. Normalize to canonical
 # values that SML rules can match consistently.
 #
-# Canonical values: csam, nudity, spam, impersonation, illegal, harassment, other
+# Canonical values: csam, nudity, violence, ai_generated, spam, impersonation,
+# illegal, harassment, other
 # Mobile maps csam -> 'illegal' and sexual content -> 'nudity' per NIP-56.
 # Web passes raw reasons (csam, harassment, sexual-content, etc.).
 _REASON_ALIASES = {
@@ -54,6 +55,12 @@ _REASON_ALIASES = {
     # Other
     'false-information': 'other',
     'NS-other': 'other',
+    # MOD namespace labels from moderation-service kind 1984 reports.
+    # These are the raw l-tag values: NS (Not Safe), VI (Violence), AI (AI-generated).
+    # The bridge receives them lowercased after strip().lower() in _normalize_report_reason.
+    'ns': 'nudity',
+    'vi': 'violence',
+    'ai': 'ai_generated',
 }
 
 
