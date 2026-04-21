@@ -183,7 +183,21 @@ class TimeseriesClickHouseQuery(BaseClickHouseQuery):
             ORDER BY `timestamp` ASC
         """
 
-        return backend.query(sql)
+        rows = backend.query(sql)
+        # Reshape flat ClickHouse rows into the Druid-era envelope the UI and
+        # `entities.py::event_counts_by_feature_for_entity_query` both consume.
+        # UI reads `point.result.count` (osprey_ui Timeseries.tsx:108); the
+        # TimeseriesResult type in osprey_ui/src/types/QueryTypes.tsx declares
+        # `result: { count: number; [key: string]: number }` to carry either a
+        # plain count or the per-dimension aggregations this query can emit
+        # (the aggregation_dimensions branch above).
+        return [
+            {
+                'timestamp': row['timestamp'],
+                'result': {k: v for k, v in row.items() if k != 'timestamp'},
+            }
+            for row in rows
+        ]
 
 
 class GroupByApproximateCountClickHouseQuery(BaseClickHouseQuery):
