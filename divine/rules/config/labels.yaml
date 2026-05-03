@@ -61,6 +61,23 @@ labels:
     connotation: negative
     description: Account is rate limited due to suspicious activity
 
+  # --- Multi-report threshold tracking ---
+
+  sexual_reported:
+    valid_for: [EventId]
+    connotation: negative
+    description: At least one report of sexual content (nudity) received for this event
+
+  violence_reported:
+    valid_for: [EventId]
+    connotation: negative
+    description: At least one report of violence received for this event
+
+  auto_hidden:
+    valid_for: [EventId]
+    connotation: negative
+    description: Content auto-hidden after meeting multi-report threshold
+
   # --- Content flags ---
 
   nsfw_flagged:
