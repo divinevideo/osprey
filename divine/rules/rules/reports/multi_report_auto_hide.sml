@@ -33,7 +33,6 @@ FirstSexualReport = Rule(
   when_all=[
     Kind == 1984,
     ReportReason == 'nudity',
-    ReportedEventId != Null,
     not HasLabel(entity=ReportedEventId, label='sexual_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
@@ -44,7 +43,6 @@ FirstViolenceReport = Rule(
   when_all=[
     Kind == 1984,
     ReportReason == 'violence',
-    ReportedEventId != Null,
     not HasLabel(entity=ReportedEventId, label='violence_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
@@ -73,7 +71,6 @@ ThresholdSexualReport = Rule(
   when_all=[
     Kind == 1984,
     ReportReason == 'nudity',
-    ReportedEventId != Null,
     HasLabel(entity=ReportedEventId, label='sexual_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
@@ -84,7 +81,6 @@ ThresholdViolenceReport = Rule(
   when_all=[
     Kind == 1984,
     ReportReason == 'violence',
-    ReportedEventId != Null,
     HasLabel(entity=ReportedEventId, label='violence_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],

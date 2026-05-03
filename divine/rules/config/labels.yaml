@@ -64,17 +64,17 @@ labels:
   # --- Multi-report threshold tracking ---
 
   sexual_reported:
-    valid_for: [EventId]
+    valid_for: [EventId, ReportedEventId]
     connotation: negative
     description: At least one report of sexual content (nudity) received for this event
 
   violence_reported:
-    valid_for: [EventId]
+    valid_for: [EventId, ReportedEventId]
     connotation: negative
     description: At least one report of violence received for this event
 
   auto_hidden:
-    valid_for: [EventId]
+    valid_for: [EventId, ReportedEventId]
     connotation: negative
     description: Content auto-hidden after meeting multi-report threshold
 
@@ -98,6 +98,6 @@ labels:
   # --- Human review ---
 
   human_reviewed:
-    valid_for: [EventId, Pubkey]
+    valid_for: [EventId, ReportedEventId, Pubkey]
     connotation: neutral
     description: A human moderator has reviewed this content or account. Human decisions override automated ones.
