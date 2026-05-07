@@ -41,6 +41,21 @@ LabelTargetEvent: str = JsonData(
   required=False
 )
 
+# Entity version for use with LabelAdd/HasLabel (needs EntityT, not plain str).
+# Type 'ReportedEventId' matches kind1984_report.sml so labels are shared
+# across report rules and label routing rules (e.g., human_reviewed guard).
+LabelTargetEventEntity: Entity[str] = EntityJson(
+  type='ReportedEventId',
+  path='$.label_target_event',
+  coerce_type=True
+)
+
+LabelTargetPubkey: str = JsonData(
+  path='$.label_target_pubkey',
+  coerce_type=True,
+  required=False
+)
+
 LabelContentHash: str = JsonData(
   path='$.label_content_hash',
   coerce_type=True,

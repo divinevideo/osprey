@@ -43,8 +43,8 @@ ConfirmedNudity = Rule(
 WhenRules(
   rules_any=[ConfirmedNudity],
   then=[
-    LabelAdd(entity=EventId, label='age_restricted'),
-    LabelAdd(entity=EventId, label='human_reviewed'),
+    LabelAdd(entity=LabelTargetEventEntity, label='age_restricted'),
+    LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='restrict'),
   ],
 )
@@ -64,8 +64,8 @@ ConfirmedViolence = Rule(
 WhenRules(
   rules_any=[ConfirmedViolence],
   then=[
-    LabelAdd(entity=EventId, label='age_restricted'),
-    LabelAdd(entity=EventId, label='human_reviewed'),
+    LabelAdd(entity=LabelTargetEventEntity, label='age_restricted'),
+    LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='restrict'),
   ],
 )
@@ -85,9 +85,12 @@ ConfirmedCSAM = Rule(
 WhenRules(
   rules_any=[ConfirmedCSAM],
   then=[
-    BanNostrEvent(event_id=EventId, pubkey=Pubkey, reason='Human confirmed CSAM'),
-    LabelAdd(entity=EventId, label='human_reviewed'),
-    LabelAdd(entity=Pubkey, label='banned'),
+    # LabelTargetEvent = content event ID (from e tag), not the label event's own ID.
+    # Pubkey here is the label publisher (moderation account). Content creator's pubkey
+    # requires p-tag in the label event (label_target_pubkey); pass empty to avoid
+    # accidentally banning the moderator. Sink skips pubkey ban when empty.
+    BanNostrEvent(event_id=LabelTargetEvent, pubkey='', reason='Human confirmed CSAM'),
+    LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='ban'),
   ],
 )
@@ -110,7 +113,7 @@ ConfirmedAIGenerated = Rule(
 WhenRules(
   rules_any=[ConfirmedAIGenerated],
   then=[
-    LabelAdd(entity=EventId, label='human_reviewed'),
+    LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='flag_for_review'),
   ],
 )
@@ -132,7 +135,7 @@ RejectedLabel = Rule(
 WhenRules(
   rules_any=[RejectedLabel],
   then=[
-    LabelAdd(entity=EventId, label='human_reviewed'),
+    LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='approve'),
   ],
 )
