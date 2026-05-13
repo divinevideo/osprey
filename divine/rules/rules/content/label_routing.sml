@@ -46,15 +46,15 @@ ConfirmedNudity = Rule(
     LabelValue in ['nudity', 'sexual', 'explicit', 'pornography'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    LabelTargetEvent != None,
-    LabelTargetEvent != '',
+    LabelContentHash != '',
   ],
-  description='Human confirmed nudity/sexual content',
+  description='Human confirmed nudity/sexual content (with media hash)',
 )
 
 WhenRules(
   rules_any=[ConfirmedNudity],
   then=[
+    AgeRestrictNostrEvent(event_id=LabelTargetEvent, sha256=LabelContentHash, reason='Human confirmed nudity'),
     LabelAdd(entity=LabelTargetEventEntity, label='age_restricted'),
     LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='restrict'),
@@ -70,15 +70,15 @@ ConfirmedViolence = Rule(
     LabelValue in ['violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    LabelTargetEvent != None,
-    LabelTargetEvent != '',
+    LabelContentHash != '',
   ],
-  description='Human confirmed violence/gore content',
+  description='Human confirmed violence/gore content (with media hash)',
 )
 
 WhenRules(
   rules_any=[ConfirmedViolence],
   then=[
+    AgeRestrictNostrEvent(event_id=LabelTargetEvent, sha256=LabelContentHash, reason='Human confirmed violence'),
     LabelAdd(entity=LabelTargetEventEntity, label='age_restricted'),
     LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='restrict'),
@@ -94,8 +94,6 @@ ConfirmedCSAM = Rule(
     LabelValue in ['csam', 'sexual_minors'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    LabelTargetEvent != None,
-    LabelTargetEvent != '',
   ],
   description='Human confirmed CSAM',
 )
@@ -164,8 +162,6 @@ ConfirmedAIGenerated = Rule(
     LabelValue in ['ai-generated', 'deepfake'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    LabelTargetEvent != None,
-    LabelTargetEvent != '',
   ],
   description='Human confirmed AI-generated or deepfake content',
 )
@@ -189,8 +185,6 @@ RejectedLabel = Rule(
     LabelNamespace == 'content-warning',
     LabelSource == 'human-moderator',
     LabelRejected,
-    LabelTargetEvent != None,
-    LabelTargetEvent != '',
   ],
   description='Human rejected AI classification (false positive)',
 )

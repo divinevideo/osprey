@@ -9,6 +9,7 @@ from services.coop_sink import COOPSink
 from services.labels_service import PostgresLabelsService
 from services.relay_manager_sink import RelayManagerSink
 from services.zendesk_sink import ZendeskSink
+from udfs.age_restrict_nostr_event import AgeRestrictNostrEvent
 from udfs.ban_nostr_event import BanNostrEvent
 from udfs.check_moderation_result import CheckModerationResult
 from udfs.nostr_account_age import NostrAccountAge
@@ -17,7 +18,13 @@ from udfs.resolve_event_author import ResolveEventAuthor
 
 @hookimpl_osprey
 def register_udfs() -> Sequence[Type[UDFBase[Any, Any]]]:
-    return [BanNostrEvent, NostrAccountAge, CheckModerationResult, ResolveEventAuthor]
+    return [
+        AgeRestrictNostrEvent,
+        BanNostrEvent,
+        NostrAccountAge,
+        CheckModerationResult,
+        ResolveEventAuthor,
+    ]
 
 
 @hookimpl_osprey

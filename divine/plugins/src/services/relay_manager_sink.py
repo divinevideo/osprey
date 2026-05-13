@@ -5,16 +5,18 @@ import requests
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
+from udfs.age_restrict_nostr_event import AgeRestrictEffect
 from udfs.ban_nostr_event import BanEventEffect
 
 logger = get_logger(__name__)
 
 
 class RelayManagerSink(BaseOutputSink):
-    """Output sink that sends ban actions to Divine's relay-manager NIP-86 endpoint.
+    """Output sink that sends moderation actions to Divine's relay-manager.
 
-    Supports both ``banevent`` (content removal) and ``banpubkey`` (user ban)
-    via the ``/api/relay-rpc`` JSON-RPC endpoint.
+    Supports ``banevent`` (content removal) and ``banpubkey`` (user ban) via the
+    ``/api/relay-rpc`` JSON-RPC endpoint, and ``AGE_RESTRICTED`` via
+    ``/api/moderate-media``.
 
     Configuration (environment variables):
       - ``DIVINE_RELAY_MANAGER_URL``: Required. Base URL of the relay-manager
@@ -43,11 +45,13 @@ class RelayManagerSink(BaseOutputSink):
     def will_do_work(self, result: ExecutionResult) -> bool:
         if not self._url:
             return False
-        return len(result.effects.get(BanEventEffect, [])) > 0
+        has_bans = len(result.effects.get(BanEventEffect, [])) > 0
+        has_restricts = len(result.effects.get(AgeRestrictEffect, [])) > 0
+        return has_bans or has_restricts
 
     def push(self, result: ExecutionResult) -> None:
-        effects: list[BanEventEffect] = result.effects.get(BanEventEffect, [])
-        for effect in effects:
+        ban_effects: list[BanEventEffect] = result.effects.get(BanEventEffect, [])
+        for effect in ban_effects:
             assert isinstance(effect, BanEventEffect)
             self._ban_event(effect)
 
@@ -67,6 +71,11 @@ class RelayManagerSink(BaseOutputSink):
                     effect.event_id,
                 )
                 raise
+
+        restrict_effects: list[AgeRestrictEffect] = result.effects.get(AgeRestrictEffect, [])
+        for effect in restrict_effects:
+            assert isinstance(effect, AgeRestrictEffect)
+            self._age_restrict_media(effect)
 
     def _ban_event(self, effect: BanEventEffect) -> None:
         payload: dict[str, Any] = {
@@ -134,6 +143,25 @@ class RelayManagerSink(BaseOutputSink):
             logger.info('Published enforcement label for event %s', effect.event_id)
         except Exception:
             logger.exception('Failed to publish enforcement label for event %s', effect.event_id)
+            raise
+
+    def _age_restrict_media(self, effect: AgeRestrictEffect) -> None:
+        payload: dict[str, Any] = {
+            'sha256': effect.sha256,
+            'action': 'AGE_RESTRICTED',
+            'reason': effect.reason,
+        }
+        try:
+            resp = requests.post(
+                f'{self._url}/api/moderate-media',
+                json=payload,
+                headers=self._headers(),
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            logger.info('Age-restricted media %s for event %s', effect.sha256, effect.event_id)
+        except Exception:
+            logger.exception('Failed to age-restrict media %s for event %s', effect.sha256, effect.event_id)
             raise
 
     def stop(self) -> None:
