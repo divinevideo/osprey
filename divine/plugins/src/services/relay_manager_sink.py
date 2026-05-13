@@ -66,7 +66,10 @@ class RelayManagerSink(BaseOutputSink):
                 try:
                     self._publish_label_event(effect)
                 except Exception:
-                    logger.warning(f'Failed to publish label event for {effect.event_id} (ban succeeded)')
+                    # Ban succeeded but audit label is lost. Log at error so
+                    # this is visible in alerting. Future: write to a dead-letter
+                    # table for retry (event_id, pubkey, reason, tags, timestamp).
+                    logger.error(f'Failed to publish enforcement label for {effect.event_id} — ban succeeded, label lost')
 
             if not event_banned:
                 raise RuntimeError(f'Failed to ban event {effect.event_id}')

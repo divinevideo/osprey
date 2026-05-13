@@ -73,10 +73,15 @@ labels:
     connotation: negative
     description: At least one report of violence received for this event
 
+  threshold_met:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: Multi-report threshold met, escalated for human review
+
   auto_hidden:
     valid_for: [EventId, ReportedEventId]
     connotation: negative
-    description: Content auto-hidden after meeting multi-report threshold
+    description: Content auto-hidden by enforcement action (CSAM, trusted reporter)
 
   # --- Content flags ---
 
@@ -86,7 +91,7 @@ labels:
     description: Content flagged for NSFW by a trusted reporter or AI classification
 
   age_restricted:
-    valid_for: [EventId]
+    valid_for: [EventId, ReportedEventId]
     connotation: negative
     description: Content requires age verification to view (maps to Blossom RESTRICT)
 

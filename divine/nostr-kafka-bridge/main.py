@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 import os
-import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
@@ -22,6 +21,7 @@ KAFKA_TOPIC = os.environ.get('KAFKA_TOPIC', 'osprey.actions_input')
 HEALTH_PORT = int(os.environ.get('HEALTH_PORT', '8080'))
 
 connected = False
+_action_counter = 0
 
 # --- Report reason normalization ---
 # Divine clients use different reason vocabularies. Normalize to canonical
@@ -36,24 +36,24 @@ _REASON_ALIASES = {
     # We can't distinguish from 'illegal' alone, so we keep it as-is.
     # The 'sexual_minors' and 'csam' forms are unambiguous.
     'sexual_minors': 'csam',
-    'NS-csam': 'csam',
+    'ns-csam': 'csam',
     # Nudity/sexual content
     'sexual-content': 'nudity',
     'sexual': 'nudity',
     'explicit': 'nudity',
     'pornography': 'nudity',
-    'NS-nudity': 'nudity',
-    'NS-sexual-content': 'nudity',
+    'ns-nudity': 'nudity',
+    'ns-sexual-content': 'nudity',
     # Harassment
     'profanity': 'harassment',
-    'NS-harassment': 'harassment',
+    'ns-harassment': 'harassment',
     # Spam
-    'NS-spam': 'spam',
+    'ns-spam': 'spam',
     # Violence
-    'NS-violence': 'violence',
+    'ns-violence': 'violence',
     # Other
     'false-information': 'other',
-    'NS-other': 'other',
+    'ns-other': 'other',
     # MOD namespace labels from moderation-service kind 1984 reports.
     # These are the raw l-tag values: NS (Not Safe), VI (Violence), AI (AI-generated).
     # The bridge receives them lowercased after strip().lower() in _normalize_report_reason.
@@ -95,9 +95,18 @@ def make_producer() -> KafkaProducer:
     )
 
 
-def _next_action_id() -> str:
-    """Generate a unique action ID."""
-    return uuid.uuid4().hex
+def _next_action_id() -> int:
+    """Generate a unique numeric action ID.
+
+    Osprey's Action dataclass requires action_id: int and the Kafka input
+    stream parser calls int(action_id). Use lower 20 bits of timestamp
+    plus a counter to stay within safe integer range without collisions
+    across bridge restarts.
+    """
+    global _action_counter
+    _action_counter += 1
+    ts_part = int(datetime.now(timezone.utc).timestamp()) % (2**20)
+    return ts_part * 100000 + (_action_counter % 100000)
 
 
 def _wrap_nostr_event(event: dict) -> dict:

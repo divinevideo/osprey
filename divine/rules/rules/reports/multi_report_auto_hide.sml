@@ -1,24 +1,25 @@
-# Multi-Report Auto-Hide
+# Multi-Report Threshold Rules
 #
-# Auto-hides content after 2+ unique reporters flag it for serious categories.
-# Uses Osprey entity labels as a counting mechanism: first report labels
-# the target event, second report checks for the label and fires auto-hide.
+# Escalates content after 2+ reports flag it for serious categories.
+# First report labels the target and flags for review. Second report
+# from a different event detects the label and escalates priority.
 #
-# Categories covered: nudity (sexual content), violence, extremism.
+# Categories covered: nudity (sexual content), violence.
 # CSAM is NOT here -- stays in ReportWatcher (threshold=1, single report).
 #
 # Bridge normalizes report reasons before they reach SML rules:
-#   sexual-content, sexual, explicit, pornography, NS-nudity -> 'nudity'
-#   violence, NS-violence -> 'violence'
+#   sexual-content, sexual, explicit, pornography, ns-nudity -> 'nudity'
+#   violence, ns-violence -> 'violence'
 #   See nostr-kafka-bridge/main.py _REASON_ALIASES for full mapping.
 #
-# The label-based pattern covers threshold=2. For higher thresholds,
-# a counter UDF would be needed (future improvement).
+# No auto-enforcement from user reports. Reporter-supplied p-tags can
+# name arbitrary pubkeys, so pubkey bans from this path would be unsafe.
+# All threshold hits route to human review (COOP/Zendesk).
 #
-# Race condition note: if two reports arrive near-simultaneously, both
-# could miss the label before PostgreSQL commits. The label service uses
-# SELECT FOR UPDATE row locking which should serialize, but this needs
-# staging validation.
+# Known limitation: labels track target event + category but not reporter
+# identity, so the same reporter submitting two distinct report events
+# can satisfy the threshold. A counter UDF keyed by (event, category,
+# reporter) is the proper fix.
 
 Import(
   rules=[
@@ -65,7 +66,7 @@ WhenRules(
   ],
 )
 
-# --- Second report: auto-hide ---
+# --- Second report: escalate for review ---
 
 ThresholdSexualReport = Rule(
   when_all=[
@@ -90,17 +91,15 @@ ThresholdViolenceReport = Rule(
 WhenRules(
   rules_any=[ThresholdSexualReport],
   then=[
-    BanNostrEvent(event_id=ReportedEventId, pubkey=ReportedPubkey, reason='Multiple reports: sexual content'),
-    LabelAdd(entity=ReportedEventId, label='auto_hidden'),
-    DeclareVerdict(verdict='auto_hide'),
+    LabelAdd(entity=ReportedEventId, label='threshold_met'),
+    DeclareVerdict(verdict='flag_for_review'),
   ],
 )
 
 WhenRules(
   rules_any=[ThresholdViolenceReport],
   then=[
-    BanNostrEvent(event_id=ReportedEventId, pubkey=ReportedPubkey, reason='Multiple reports: violence'),
-    LabelAdd(entity=ReportedEventId, label='auto_hidden'),
-    DeclareVerdict(verdict='auto_hide'),
+    LabelAdd(entity=ReportedEventId, label='threshold_met'),
+    DeclareVerdict(verdict='flag_for_review'),
   ],
 )
