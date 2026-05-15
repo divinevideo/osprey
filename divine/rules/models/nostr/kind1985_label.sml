@@ -79,3 +79,13 @@ LabelRejected: bool = JsonData(
   coerce_type=True,
   required=False
 )
+
+# Plain string version of the event signer pubkey for rule conditions.
+# The Entity version (Pubkey in base.sml) can't be compared against
+# string literals in SML conditions; this accessor enables trusted
+# signer checks in label_routing.sml.
+LabelSignerPubkey: str = JsonData(
+  path='$.pubkey',
+  coerce_type=True,
+  required=False
+)
