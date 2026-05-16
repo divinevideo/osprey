@@ -90,6 +90,7 @@ ConfirmedCSAM = Rule(
     LabelValue in ['csam', 'sexual_minors'],
     LabelSource == 'human-moderator',
     not LabelRejected,
+    LabelTargetEvent != None,
   ],
   description='Human confirmed CSAM',
 )

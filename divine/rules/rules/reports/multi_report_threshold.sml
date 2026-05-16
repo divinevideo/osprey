@@ -1,8 +1,8 @@
-# Multi-Report Threshold Rules
+# Multi-Report Threshold Escalation
 #
-# Escalates content after 2+ reports flag it for serious categories.
-# First report labels the target and flags for review. Second report
-# from a different event detects the label and escalates priority.
+# Escalates content priority after 2+ reports flag it for serious categories.
+# First report labels the target event, second report detects the label
+# and escalates to human review (COOP/Zendesk queue).
 #
 # Categories covered: nudity (sexual content), violence.
 # CSAM is NOT here -- stays in ReportWatcher (threshold=1, single report).
@@ -14,12 +14,13 @@
 #
 # No auto-enforcement from user reports. Reporter-supplied p-tags can
 # name arbitrary pubkeys, so pubkey bans from this path would be unsafe.
-# All threshold hits route to human review (COOP/Zendesk).
+# All threshold hits route to human review only.
 #
-# Known limitation: labels track target event + category but not reporter
-# identity, so the same reporter submitting two distinct report events
-# can satisfy the threshold. A counter UDF keyed by (event, category,
-# reporter) is the proper fix.
+# P2: distinct-reporter deduplication. Labels track target event +
+# category but not reporter identity, so the same reporter submitting
+# two distinct report events can satisfy the threshold. Impact is low
+# because threshold only escalates review priority (no auto-ban/hide).
+# Proper fix: counter UDF keyed by (event, category, reporter_pubkey).
 
 Import(
   rules=[
