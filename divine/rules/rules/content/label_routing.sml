@@ -46,6 +46,7 @@ ConfirmedNudity = Rule(
     LabelValue in ['nudity', 'sexual', 'explicit', 'pornography'],
     LabelSource == 'human-moderator',
     not LabelRejected,
+    LabelTargetEvent != None,
   ],
   description='Human confirmed nudity/sexual content',
 )
@@ -68,6 +69,7 @@ ConfirmedViolence = Rule(
     LabelValue in ['violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
     not LabelRejected,
+    LabelTargetEvent != None,
   ],
   description='Human confirmed violence/gore content',
 )
@@ -120,6 +122,7 @@ ConfirmedAIGenerated = Rule(
     LabelValue in ['ai-generated', 'deepfake'],
     LabelSource == 'human-moderator',
     not LabelRejected,
+    LabelTargetEvent != None,
   ],
   description='Human confirmed AI-generated or deepfake content',
 )
@@ -143,6 +146,7 @@ RejectedLabel = Rule(
     LabelNamespace == 'content-warning',
     LabelSource == 'human-moderator',
     LabelRejected,
+    LabelTargetEvent != None,
   ],
   description='Human rejected AI classification (false positive)',
 )

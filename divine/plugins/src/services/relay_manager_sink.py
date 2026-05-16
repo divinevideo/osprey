@@ -68,6 +68,10 @@ class RelayManagerSink(BaseOutputSink):
                 except Exception:
                     # Re-raise so the sink retry path re-attempts the whole push.
                     # Ban and pubkey-ban are idempotent, so replaying them is safe.
+                    # Label publish is NOT idempotent (each attempt creates a new
+                    # signed event), so retries may produce duplicate enforcement
+                    # labels. Acceptable: duplicates are cosmetic, and losing the
+                    # audit trail is worse than duplicating it.
                     logger.error(
                         f'Failed to publish enforcement label for {effect.event_id} — ban succeeded, label lost'
                     )
