@@ -238,7 +238,7 @@ def _wrap_nostr_event(event: dict) -> dict:
         # for trusted reporters via the CSAM rule.
         if not raw_reason:
             content_lower = event.get('content', '').strip().lower()
-            for reason in ('csam', 'sexual_minors', 'nudity', 'spam', 'impersonation'):
+            for reason in ('csam', 'sexual_minors', 'nudity', 'violence', 'harassment', 'spam', 'impersonation'):
                 if content_lower == reason:
                     raw_reason = reason
                     break

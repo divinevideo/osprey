@@ -47,6 +47,7 @@ ConfirmedNudity = Rule(
     LabelSource == 'human-moderator',
     not LabelRejected,
     LabelTargetEvent != None,
+    LabelTargetEvent != '',
   ],
   description='Human confirmed nudity/sexual content',
 )
@@ -70,6 +71,7 @@ ConfirmedViolence = Rule(
     LabelSource == 'human-moderator',
     not LabelRejected,
     LabelTargetEvent != None,
+    LabelTargetEvent != '',
   ],
   description='Human confirmed violence/gore content',
 )
@@ -93,6 +95,7 @@ ConfirmedCSAM = Rule(
     LabelSource == 'human-moderator',
     not LabelRejected,
     LabelTargetEvent != None,
+    LabelTargetEvent != '',
   ],
   description='Human confirmed CSAM',
 )
@@ -123,6 +126,7 @@ ConfirmedAIGenerated = Rule(
     LabelSource == 'human-moderator',
     not LabelRejected,
     LabelTargetEvent != None,
+    LabelTargetEvent != '',
   ],
   description='Human confirmed AI-generated or deepfake content',
 )
@@ -147,6 +151,7 @@ RejectedLabel = Rule(
     LabelSource == 'human-moderator',
     LabelRejected,
     LabelTargetEvent != None,
+    LabelTargetEvent != '',
   ],
   description='Human rejected AI classification (false positive)',
 )
