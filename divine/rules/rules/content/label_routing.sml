@@ -113,6 +113,45 @@ WhenRules(
   ],
 )
 
+# Human confirmed CSAM but label has no event target (hash-only).
+# Can't ban an event we don't have an ID for, but the content hash
+# is actionable. Route to manual review so a human can locate and
+# remove the content by hash.
+ConfirmedCSAMHashOnlyNullTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    LabelNamespace == 'content-warning',
+    LabelValue in ['csam', 'sexual_minors'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    LabelContentHash != '',
+    LabelTargetEvent == None,
+  ],
+  description='Human confirmed CSAM (hash only, null event target)',
+)
+
+ConfirmedCSAMHashOnlyEmptyTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    LabelNamespace == 'content-warning',
+    LabelValue in ['csam', 'sexual_minors'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    LabelContentHash != '',
+    LabelTargetEvent == '',
+  ],
+  description='Human confirmed CSAM (hash only, empty event target)',
+)
+
+WhenRules(
+  rules_any=[ConfirmedCSAMHashOnlyNullTarget, ConfirmedCSAMHashOnlyEmptyTarget],
+  then=[
+    DeclareVerdict(verdict='flag_for_review'),
+  ],
+)
+
 # Human confirmed: content is AI-generated or deepfake.
 # Flag for review rather than auto-ban. Policy on AI content is
 # still evolving (per Mar 9 call: Divine's mission is authenticity

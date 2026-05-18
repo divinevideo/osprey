@@ -1,8 +1,8 @@
 # Multi-Report Threshold Escalation
 #
-# Escalates content priority after 2+ reports flag it for serious categories.
-# First report labels the target event, second report detects the label
-# and escalates to human review (COOP/Zendesk queue).
+# Auto-hides content after 2+ reports flag it for serious categories.
+# First report labels the target event and flags for review. Second
+# report detects the label, auto-hides the event, and marks threshold met.
 #
 # Categories covered: nudity (sexual content), violence.
 # CSAM is NOT here -- stays in ReportWatcher (threshold=1, single report).
@@ -12,14 +12,15 @@
 #   violence, ns-violence -> 'violence'
 #   See nostr-kafka-bridge/main.py _REASON_ALIASES for full mapping.
 #
-# No auto-enforcement from user reports. Reporter-supplied p-tags can
-# name arbitrary pubkeys, so pubkey bans from this path would be unsafe.
-# All threshold hits route to human review only.
+# Auto-hide uses event-level ban only (no pubkey ban). Reporter-supplied
+# p-tags can name arbitrary pubkeys, so pubkey enforcement from user
+# reports is unsafe. Event-level hide is safe because the ReportedEventId
+# is the actual reported event.
 #
 # P2: distinct-reporter deduplication. Labels track target event +
 # category but not reporter identity, so the same reporter submitting
-# two distinct report events can satisfy the threshold. Impact is low
-# because threshold only escalates review priority (no auto-ban/hide).
+# two distinct report events can satisfy the threshold. Mitigated by
+# the action being event-hide (reversible), not pubkey ban.
 # Proper fix: counter UDF keyed by (event, category, reporter_pubkey).
 
 Import(
@@ -92,15 +93,19 @@ ThresholdViolenceReport = Rule(
 WhenRules(
   rules_any=[ThresholdSexualReport],
   then=[
+    BanNostrEvent(event_id=ReportedEvent, pubkey='', reason='Multi-report threshold: nudity'),
     LabelAdd(entity=ReportedEventId, label='threshold_met'),
-    DeclareVerdict(verdict='flag_for_review'),
+    LabelAdd(entity=ReportedEventId, label='auto_hidden'),
+    DeclareVerdict(verdict='auto_hide'),
   ],
 )
 
 WhenRules(
   rules_any=[ThresholdViolenceReport],
   then=[
+    BanNostrEvent(event_id=ReportedEvent, pubkey='', reason='Multi-report threshold: violence'),
     LabelAdd(entity=ReportedEventId, label='threshold_met'),
-    DeclareVerdict(verdict='flag_for_review'),
+    LabelAdd(entity=ReportedEventId, label='auto_hidden'),
+    DeclareVerdict(verdict='auto_hide'),
   ],
 )
