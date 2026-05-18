@@ -21,10 +21,8 @@ KAFKA_BOOTSTRAP_SERVERS = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092'
 KAFKA_TOPIC = os.environ.get('KAFKA_TOPIC', 'osprey.actions_input')
 HEALTH_PORT = int(os.environ.get('HEALTH_PORT', '8080'))
 
-# Counter for generating action IDs (combined with timestamp for uniqueness)
-_action_counter = 0
-
 connected = False
+_action_counter = 0
 
 # --- Report reason normalization ---
 # Divine clients use different reason vocabularies. Normalize to canonical
@@ -39,22 +37,24 @@ _REASON_ALIASES = {
     # We can't distinguish from 'illegal' alone, so we keep it as-is.
     # The 'sexual_minors' and 'csam' forms are unambiguous.
     'sexual_minors': 'csam',
-    'NS-csam': 'csam',
+    'ns-csam': 'csam',
     # Nudity/sexual content
     'sexual-content': 'nudity',
     'sexual': 'nudity',
     'explicit': 'nudity',
     'pornography': 'nudity',
-    'NS-nudity': 'nudity',
-    'NS-sexual-content': 'nudity',
+    'ns-nudity': 'nudity',
+    'ns-sexual-content': 'nudity',
     # Harassment
     'profanity': 'harassment',
-    'NS-harassment': 'harassment',
+    'ns-harassment': 'harassment',
     # Spam
-    'NS-spam': 'spam',
+    'ns-spam': 'spam',
+    # Violence
+    'ns-violence': 'violence',
     # Other
     'false-information': 'other',
-    'NS-other': 'other',
+    'ns-other': 'other',
     # MOD namespace labels from moderation-service kind 1984 reports.
     # These are the raw l-tag values: NS (Not Safe), VI (Violence), AI (AI-generated).
     # The bridge receives them lowercased after strip().lower() in _normalize_report_reason.
@@ -97,10 +97,15 @@ def make_producer() -> KafkaProducer:
 
 
 def _next_action_id() -> int:
-    """Generate a unique action ID from timestamp + counter."""
+    """Generate a unique numeric action ID.
+
+    Osprey's Action dataclass requires action_id: int and the Kafka input
+    stream parser calls int(action_id). Use lower 20 bits of timestamp
+    plus a counter to stay within safe integer range without collisions
+    across bridge restarts.
+    """
     global _action_counter
     _action_counter += 1
-    # Use lower 20 bits of unix timestamp + counter to stay within safe int range
     ts_part = int(datetime.now(timezone.utc).timestamp()) % (2**20)
     return ts_part * 100000 + (_action_counter % 100000)
 
@@ -162,6 +167,8 @@ def _wrap_nostr_event(event: dict) -> dict:
                             data['label_metadata'] = t[3]
                 elif t[0] == 'e':
                     data['label_target_event'] = t[1]
+                elif t[0] == 'p':
+                    data['label_target_pubkey'] = t[1]
                 elif t[0] == 'x':
                     data['label_content_hash'] = t[1]
 
@@ -225,11 +232,14 @@ def _wrap_nostr_event(event: dict) -> dict:
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        # 6. Keyword scan in content text (last resort)
+        # 6. Keyword scan in content text (last resort).
+        # Only match if content is the keyword alone (not a substring of freetext).
+        # 'illegal' excluded: ambiguous in freetext and would escalate to auto-hide
+        # for trusted reporters via the CSAM rule.
         if not raw_reason:
-            content_lower = event.get('content', '').lower()
-            for reason in ('csam', 'sexual_minors', 'nudity', 'spam', 'impersonation', 'illegal'):
-                if reason in content_lower:
+            content_lower = event.get('content', '').strip().lower()
+            for reason in ('csam', 'sexual_minors', 'nudity', 'violence', 'harassment', 'spam', 'impersonation'):
+                if content_lower == reason:
                     raw_reason = reason
                     break
 
@@ -246,7 +256,7 @@ def _wrap_nostr_event(event: dict) -> dict:
     return {
         'send_time': send_time,
         'data': {
-            'action_id': str(_next_action_id()),
+            'action_id': _next_action_id(),
             'action_name': f'nostr_kind_{kind}',
             'data': data,
         },

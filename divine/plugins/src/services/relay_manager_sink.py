@@ -49,8 +49,6 @@ class RelayManagerSink(BaseOutputSink):
         effects: List[BanEventEffect] = result.effects.get(BanEventEffect, [])
         for effect in effects:
             assert isinstance(effect, BanEventEffect)
-            # Attempt both independently. Event ban is primary, pubkey ban
-            # is secondary. Either can fail without blocking the other.
             event_banned = False
             try:
                 self._ban_event(effect)
@@ -64,8 +62,21 @@ class RelayManagerSink(BaseOutputSink):
                 except Exception:
                     pass  # Already logged in _ban_pubkey
 
-            # Raise after both attempts if the primary action failed,
-            # so the sink framework knows this effect wasn't fully processed.
+            if event_banned:
+                try:
+                    self._publish_label_event(effect)
+                except Exception:
+                    # Re-raise so the sink retry path re-attempts the whole push.
+                    # Ban and pubkey-ban are idempotent, so replaying them is safe.
+                    # Label publish is NOT idempotent (each attempt creates a new
+                    # signed event), so retries may produce duplicate enforcement
+                    # labels. Acceptable: duplicates are cosmetic, and losing the
+                    # audit trail is worse than duplicating it.
+                    logger.error(
+                        f'Failed to publish enforcement label for {effect.event_id} — ban succeeded, label lost'
+                    )
+                    raise
+
             if not event_banned:
                 raise RuntimeError(f'Failed to ban event {effect.event_id}')
 
@@ -103,6 +114,38 @@ class RelayManagerSink(BaseOutputSink):
             logger.info(f'Banned pubkey {effect.pubkey} via relay-manager')
         except Exception:
             logger.exception(f'Failed to ban pubkey {effect.pubkey} via relay-manager')
+            raise
+
+    def _publish_label_event(self, effect: BanEventEffect) -> None:
+        """Publish a Kind 1985 label event as an audit trail for the ban action.
+
+        Uses moderation/enforcement namespace (not moderation/resolution) so
+        relay-manager doesn't treat it as a human review decision.
+        """
+        tags: List[List[str]] = [
+            ['L', 'moderation/enforcement'],
+            ['l', 'auto_hidden', 'moderation/enforcement'],
+            ['e', effect.event_id],
+        ]
+        if effect.pubkey:
+            tags.append(['p', effect.pubkey])
+
+        payload: Dict[str, Any] = {
+            'kind': 1985,
+            'content': effect.reason,
+            'tags': tags,
+        }
+        try:
+            resp = requests.post(
+                f'{self._url}/api/publish',
+                json=payload,
+                headers=self._headers(),
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            logger.info(f'Published enforcement label for event {effect.event_id}')
+        except Exception:
+            logger.exception(f'Failed to publish enforcement label for event {effect.event_id}')
             raise
 
     def stop(self) -> None:

@@ -61,6 +61,28 @@ labels:
     connotation: negative
     description: Account is rate limited due to suspicious activity
 
+  # --- Multi-report threshold tracking ---
+
+  sexual_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one report of sexual content (nudity) received for this event
+
+  violence_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one report of violence received for this event
+
+  threshold_met:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: Multi-report threshold met, escalated for human review
+
+  auto_hidden:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: Content auto-hidden by enforcement action (CSAM, trusted reporter)
+
   # --- Content flags ---
 
   nsfw_flagged:
@@ -69,7 +91,7 @@ labels:
     description: Content flagged for NSFW by a trusted reporter or AI classification
 
   age_restricted:
-    valid_for: [EventId]
+    valid_for: [EventId, ReportedEventId]
     connotation: negative
     description: Content requires age verification to view (maps to Blossom RESTRICT)
 
@@ -81,6 +103,6 @@ labels:
   # --- Human review ---
 
   human_reviewed:
-    valid_for: [EventId, Pubkey]
+    valid_for: [EventId, ReportedEventId, Pubkey]
     connotation: neutral
     description: A human moderator has reviewed this content or account. Human decisions override automated ones.
