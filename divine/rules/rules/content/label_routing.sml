@@ -94,6 +94,8 @@ ConfirmedCSAM = Rule(
     LabelValue in ['csam', 'sexual_minors'],
     LabelSource == 'human-moderator',
     not LabelRejected,
+    LabelTargetEvent != None,
+    LabelTargetEvent != '',
   ],
   description='Human confirmed CSAM',
 )
@@ -162,6 +164,8 @@ ConfirmedAIGenerated = Rule(
     LabelValue in ['ai-generated', 'deepfake'],
     LabelSource == 'human-moderator',
     not LabelRejected,
+    LabelTargetEvent != None,
+    LabelTargetEvent != '',
   ],
   description='Human confirmed AI-generated or deepfake content',
 )
@@ -185,6 +189,8 @@ RejectedLabel = Rule(
     LabelNamespace == 'content-warning',
     LabelSource == 'human-moderator',
     LabelRejected,
+    LabelTargetEvent != None,
+    LabelTargetEvent != '',
   ],
   description='Human rejected AI classification (false positive)',
 )
