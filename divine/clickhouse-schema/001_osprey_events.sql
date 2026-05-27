@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `NoteText`             String DEFAULT '',
     `MentionedPubkeys`     String DEFAULT '[]',
     `ReportedEventId`      String DEFAULT '',
+    `ReportedEvent`        String DEFAULT '',
     `ReportedPubkey`       String DEFAULT '',
     `ReportReason`         String DEFAULT '',
 

@@ -106,9 +106,30 @@ class ClickHouseOutputSink(BaseOutputSink):
 
         rows_to_flush = len(self._buffer)
         try:
-            # clickhouse-connect requires column_names + list-of-lists, not dicts
-            column_names = list(self._buffer[0].keys())
-            data = [list(row.get(col, '') for col in column_names) for row in self._buffer]
+            # Build union of all column names across the batch. Different
+            # event types produce different feature keys, so row dicts
+            # vary within a batch.
+            all_columns: dict[str, Any] = {}
+            for row in self._buffer:
+                for col, val in row.items():
+                    if col not in all_columns or all_columns[col] is None:
+                        all_columns[col] = val
+            column_names = list(all_columns.keys())
+
+            # Infer a type-appropriate default for missing values.
+            # ClickHouse columns are not Nullable, so None is not valid.
+            col_defaults: dict[str, Any] = {}
+            for col in column_names:
+                sample = all_columns[col]
+                if isinstance(sample, int):
+                    col_defaults[col] = 0
+                else:
+                    col_defaults[col] = ''
+
+            data = [
+                [row.get(col, col_defaults[col]) for col in column_names]
+                for row in self._buffer
+            ]
             self._client.insert(
                 f'{self._database}.{self._table}',
                 data=data,
