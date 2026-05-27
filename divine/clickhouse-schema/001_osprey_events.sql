@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `LabelTargetEvent`     String DEFAULT '',
     `LabelContentHash`     String DEFAULT '',
     `LabelConfidence`      Float32 DEFAULT 0,
+    `LabelSignerPubkey`    String DEFAULT '',
+    `LabelTargetPubkey`    String DEFAULT '',
+    `LabelTargetEventEntity` String DEFAULT '',
 
     -- Video event fields
     `VideoHash`            String DEFAULT '',
@@ -60,6 +63,10 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `NeedsReview`          UInt8 DEFAULT 0,
     `ModerationServiceBan` UInt8 DEFAULT 0,
     `RejectedLabel`        UInt8 DEFAULT 0,
+    `FirstSexualReport`    UInt8 DEFAULT 0,
+    `FirstViolenceReport`  UInt8 DEFAULT 0,
+    `ThresholdSexualReport` UInt8 DEFAULT 0,
+    `ThresholdViolenceReport` UInt8 DEFAULT 0,
     `__entity_label_mutations` String DEFAULT '',
     `__ban_nostr_event`    String DEFAULT '',
 

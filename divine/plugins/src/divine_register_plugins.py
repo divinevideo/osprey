@@ -5,6 +5,7 @@ from osprey.worker.adaptor.plugin_manager import hookimpl_osprey
 from osprey.worker.lib.config import Config
 from osprey.worker.lib.storage.labels import LabelsServiceBase
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink, StdoutOutputSink
+from services.coop_sink import COOPSink
 from services.labels_service import PostgresLabelsService
 from services.relay_manager_sink import RelayManagerSink
 from services.zendesk_sink import ZendeskSink
@@ -24,6 +25,7 @@ def register_output_sinks(config: Config) -> Sequence[BaseOutputSink]:
         StdoutOutputSink(log_sampler=None),
         RelayManagerSink(),
         ZendeskSink(),
+        COOPSink(),
     ]
 
     # ClickHouse output sink for query UI

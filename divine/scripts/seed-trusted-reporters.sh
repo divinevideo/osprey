@@ -41,14 +41,14 @@ if [[ "${1:-}" == "--staging" ]]; then
   echo "Seeding trusted_reporter labels on staging via kubectl..."
   SQL=$(generate_sql)
   kubectl exec -n osprey osprey-postgres-0 -- \
-    psql -U osprey -d osprey_db -c "$SQL"
+    psql -U osprey -d osprey -c "$SQL"
 elif [[ "${1:-}" == "--dry-run" ]]; then
   echo "-- SQL that would be executed:"
   generate_sql
 else
   echo "Seeding trusted_reporter labels on local dev..."
   SQL=$(generate_sql)
-  psql -h localhost -U osprey -d osprey_db -c "$SQL"
+  psql -h localhost -U osprey -d osprey -c "$SQL"
 fi
 
 echo "Done. Seeded ${#TRUSTED_PUBKEYS[@]} trusted reporter(s)."
