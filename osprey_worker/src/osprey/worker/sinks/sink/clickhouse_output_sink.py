@@ -47,9 +47,13 @@ class ClickHouseOutputSink(BaseOutputSink):
     def will_do_work(self, result: ExecutionResult) -> bool:
         return True
 
-    _PASSTHROUGH_INTERNAL_KEYS = frozenset({
-        '__verdicts', '__entity_label_mutations', '__ban_nostr_event',
-    })
+    _PASSTHROUGH_INTERNAL_KEYS = frozenset(
+        {
+            '__verdicts',
+            '__entity_label_mutations',
+            '__ban_nostr_event',
+        }
+    )
 
     def push(self, result: ExecutionResult) -> None:
         try:
@@ -114,10 +118,7 @@ class ClickHouseOutputSink(BaseOutputSink):
                 else:
                     col_defaults[col] = ''
 
-            data = [
-                [row.get(col, col_defaults[col]) for col in column_names]
-                for row in self._buffer
-            ]
+            data = [[row.get(col, col_defaults[col]) for col in column_names] for row in self._buffer]
             self._client.insert(
                 f'{self._database}.{self._table}',
                 data=data,
