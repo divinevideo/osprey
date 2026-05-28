@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict
+from typing import Any
 
 import requests
 import sentry_sdk
@@ -28,7 +28,6 @@ class COOPSink(BaseOutputSink):
     """
 
     timeout: float = 5.0
-    max_retries: int = 2
 
     def __init__(self) -> None:
         self._url = os.environ.get('DIVINE_COOP_URL', '')
@@ -40,7 +39,7 @@ class COOPSink(BaseOutputSink):
         elif not self._api_key:
             logger.warning('DIVINE_COOP_API_KEY not set. COOPSink will fail auth.')
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         return {
             'Content-Type': 'application/json',
             'x-api-key': self._api_key,
@@ -60,8 +59,8 @@ class COOPSink(BaseOutputSink):
         features = result.extracted_features
         event_id = features.get('EventId', str(result.action.action_id))
 
-        content: Dict[str, Any] = {
-            'event_id': features.get('EventId', ''),
+        content: dict[str, Any] = {
+            'event_id': event_id,
             'pubkey': features.get('Pubkey', ''),
             'kind': features.get('Kind'),
             'created_at': features.get('CreatedAt'),
@@ -85,7 +84,7 @@ class COOPSink(BaseOutputSink):
         reported_pubkey = features.get('ReportedPubkey')
         user_id = str(reported_pubkey) if reported_pubkey else features.get('Pubkey', '')
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             'contentId': event_id,
             'contentType': self._content_type,
             'userId': user_id,
@@ -101,9 +100,11 @@ class COOPSink(BaseOutputSink):
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            logger.info(f'Submitted to COOP: event={event_id} verdict={verdict.verdict} kind={features.get("Kind")}')
+            logger.info(
+                'Submitted to COOP: event=%s verdict=%s kind=%s', event_id, verdict.verdict, features.get('Kind')
+            )
         except Exception:
-            logger.exception(f'Failed to submit to COOP: event={event_id} verdict={verdict.verdict}')
+            logger.exception('Failed to submit to COOP: event=%s verdict=%s', event_id, verdict.verdict)
             sentry_sdk.capture_exception()
 
     def stop(self) -> None:

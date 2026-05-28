@@ -200,6 +200,11 @@ services:
       # - DIVINE_RELAY_MANAGER_API_KEY=osprey-local-dev-key
       - DIVINE_RELAY_MANAGER_URL=
       - DIVINE_RELAY_MANAGER_API_KEY=
+      # COOP review queue — disabled by default. Set when testing with COOP:
+      # - DIVINE_COOP_URL=http://host.docker.internal:4001
+      # - DIVINE_COOP_API_KEY=<org-api-key-from-create-org-and-user>
+      - DIVINE_COOP_URL=
+      - DIVINE_COOP_API_KEY=
       - DIVINE_MODERATION_API_URL=https://moderation-api.divine.video
       - OSPREY_RULES_SINK_NUM_WORKERS=1
       - SNOWFLAKE_API_ENDPOINT=http://snowflake-id-worker:8088
