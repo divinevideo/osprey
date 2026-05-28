@@ -109,7 +109,7 @@ class ClickHouseOutputSink(BaseOutputSink):
             col_defaults: dict[str, Any] = {}
             for col in column_names:
                 sample = all_columns[col]
-                if isinstance(sample, int):
+                if isinstance(sample, (int, float)):
                     col_defaults[col] = 0
                 else:
                     col_defaults[col] = ''

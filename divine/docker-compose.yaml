@@ -18,7 +18,7 @@
 #
 # Verify:
 #   docker compose logs osprey-worker --tail 20    # rule verdicts
-#   curl -s 'http://localhost:8123' \
+#   curl -s 'http://localhost:8123/?user=default&password=clickhouse' \
 #     --data 'SELECT Kind, __verdicts FROM osprey.osprey_events FORMAT Pretty'
 #   http://localhost:5002                           # Osprey UI
 

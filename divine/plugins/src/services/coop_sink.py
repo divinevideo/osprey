@@ -2,6 +2,7 @@ import os
 from typing import Any, Dict
 
 import requests
+import sentry_sdk
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.engine.language_types.verdicts import VerdictEffect
 from osprey.worker.lib.osprey_shared.logging import get_logger
@@ -103,7 +104,7 @@ class COOPSink(BaseOutputSink):
             logger.info(f'Submitted to COOP: event={event_id} verdict={verdict.verdict} kind={features.get("Kind")}')
         except Exception:
             logger.exception(f'Failed to submit to COOP: event={event_id} verdict={verdict.verdict}')
-            raise
+            sentry_sdk.capture_exception()
 
     def stop(self) -> None:
         pass
