@@ -1,38 +1,12 @@
 # Divine Osprey — local development stack
-# Uses Kind cluster's ClickHouse and Funnelcake relay
+# Self-contained: all services (Kafka, ClickHouse, Postgres, etc.) run in
+# this compose stack. No Kind cluster or external dependencies required.
 #
-# Setup (one-time):
-#   1. Start Kind cluster with Funnelcake:
-#        cd ~/code/divine-relay-test
-#        bash scripts/setup-cluster.sh
-#        bash scripts/relays/setup-funnelcake.sh
-#      If the migration job times out, deploy manually:
-#        kubectl apply -f k8s/funnelcake-deployment.yaml
-#
-#   2. Init ClickHouse schema (Kind's ClickHouse requires auth):
-#        cd ~/code/osprey/divine
-#        python3 -c "
-#        import urllib.request, sys
-#        sql = open('clickhouse-schema/001_osprey_events.sql').read()
-#        for i, part in enumerate(sql.split('CREATE ')):
-#            if i == 0: continue
-#            stmt = 'CREATE ' + part.strip().rstrip(';')
-#            req = urllib.request.Request(
-#                'http://localhost:8123/?user=default&password=clickhouse',
-#                data=stmt.encode())
-#            try:
-#                urllib.request.urlopen(req)
-#                print(f'Statement {i}: OK')
-#            except Exception as e:
-#                print(f'Statement {i}: {e.read().decode()[:200] if hasattr(e,\"read\") else e}')
-#        "
-#
-#   3. Start Osprey:
-#        cd ~/code/osprey/divine
-#        docker compose up -d
-#
-#   4. Seed test data:
-#        bash scripts/seed-test-data.sh
+# Quick start:
+#   cd ~/code/osprey/divine
+#   docker compose up -d --build
+#   ./scripts/init-clickhouse.sh
+#   ./scripts/test-local.sh
 #
 # Enforcement test (optional):
 #   Requires relay-manager running on Wrangler:
@@ -44,12 +18,13 @@
 #
 # Verify:
 #   docker compose logs osprey-worker --tail 20    # rule verdicts
-#   curl -s 'http://localhost:8123/?user=default&password=clickhouse' \
+#   curl -s 'http://localhost:8123' \
 #     --data 'SELECT Kind, __verdicts FROM osprey.osprey_events FORMAT Pretty'
 #   http://localhost:5002                           # Osprey UI
 
 volumes:
   metadata_data: {}
+  clickhouse_data: {}
 
 services:
   # ── Kafka (KRaft, no ZooKeeper) ──────────────────────────────────────
@@ -128,6 +103,30 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── ClickHouse ────────────────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    hostname: clickhouse
+    container_name: divine-clickhouse
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DB: osprey
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user default --password clickhouse --query 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Osprey Coordinator ───────────────────────────────────────────────
   osprey-coordinator:
     build:
@@ -167,6 +166,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     ports:
       - "127.0.0.1:5011:5000"
     environment:
@@ -182,9 +183,9 @@ services:
       - OSPREY_KAFKA_OUTPUT_TOPIC=osprey.execution_results
       - OSPREY_KAFKA_OUTPUT_CLIENT_ID=divine-worker
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      # ClickHouse output — uses Kind cluster's ClickHouse on host
+      # ClickHouse output
       - OSPREY_CLICKHOUSE_OUTPUT_SINK=true
-      - OSPREY_CLICKHOUSE_HOST=host.docker.internal
+      - OSPREY_CLICKHOUSE_HOST=clickhouse
       - OSPREY_CLICKHOUSE_PORT=8123
       - OSPREY_CLICKHOUSE_DATABASE=osprey
       - OSPREY_CLICKHOUSE_TABLE=osprey_events
@@ -194,8 +195,11 @@ services:
       # Plugins & rules
       - OSPREY_PLUGIN_PATH=/osprey/divine_plugins/src
       - OSPREY_RULES_PATH=/osprey/divine_rules
-      - DIVINE_RELAY_MANAGER_URL=http://host.docker.internal:8787
-      - DIVINE_RELAY_MANAGER_API_KEY=osprey-local-dev-key
+      # Relay manager — disabled by default. Set these when running wrangler dev:
+      # - DIVINE_RELAY_MANAGER_URL=http://host.docker.internal:8787
+      # - DIVINE_RELAY_MANAGER_API_KEY=osprey-local-dev-key
+      - DIVINE_RELAY_MANAGER_URL=
+      - DIVINE_RELAY_MANAGER_API_KEY=
       - DIVINE_MODERATION_API_URL=https://moderation-api.divine.video
       - OSPREY_RULES_SINK_NUM_WORKERS=1
       - SNOWFLAKE_API_ENDPOINT=http://snowflake-id-worker:8088
@@ -242,8 +246,8 @@ services:
       - OSPREY_DISABLE_VALIDATION_EXPORTER=true
       - SNOWFLAKE_API_ENDPOINT=http://snowflake-id-worker:8088
       - SNOWFLAKE_EPOCH=1420070400000
-      # ClickHouse — uses Kind cluster's ClickHouse on host
-      - CLICKHOUSE_HOST=host.docker.internal
+      # ClickHouse
+      - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
       - CLICKHOUSE_DATABASE=osprey
       - CLICKHOUSE_TABLE=osprey_events

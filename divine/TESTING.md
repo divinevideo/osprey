@@ -3,22 +3,18 @@
 ## Prerequisites
 
 - Docker & Docker Compose v2+
-- `gh` CLI (for cloning) or git
 - `curl` (for ClickHouse queries)
 
 ## Quick Start
 
 ```bash
-# Start the full stack
 cd divine
 docker compose up -d --build
-
-# Apply ClickHouse schema
 ./scripts/init-clickhouse.sh
-
-# Run the automated test
 ./scripts/test-local.sh
 ```
+
+The stack is self-contained: Kafka, ClickHouse, Postgres, and all Osprey services run in Docker Compose. No Kind cluster required.
 
 ## Services
 
@@ -28,79 +24,88 @@ docker compose up -d --build
 | ClickHouse | 8123 (HTTP), 9000 (native) | Event storage & analytics |
 | Postgres | 5432 | Labels service metadata |
 | etcd | 2379 | Coordination |
-| Osprey Worker | 5001 | Rule execution engine |
+| Osprey Worker | 5011 | Rule execution engine |
 | Osprey Coordinator | 5003 | Job coordination |
 | Osprey UI | 5002 | Web dashboard |
 | Nostr-Kafka Bridge | — | Streams relay events into Kafka |
 
 ## Sending Test Events
 
+Events must be in the bridge envelope format:
+
+```json
+{
+  "send_time": "2026-01-01T00:00:00+00:00",
+  "data": {
+    "action_id": 12345,
+    "action_name": "nostr_kind_1984",
+    "data": {
+      "id": "event_hex_id",
+      "pubkey": "hex_pubkey",
+      "kind": 1984,
+      "created_at": 1709000000,
+      "content": "report content",
+      "tags": [["report", "nudity"], ["e", "target_event_id"], ["p", "target_pubkey"]],
+      "sig": "hex_sig",
+      "reported_event_id": "target_event_id",
+      "reported_pubkey": "target_pubkey",
+      "report_reason": "nudity"
+    }
+  }
+}
+```
+
 ### Via Kafka directly
 
 ```bash
-# Single event
-echo '{"id":"test1","pubkey":"abc","kind":1,"created_at":1709000000,"content":"hello","tags":[],"sig":"x"}' | \
-  docker exec -i divine-kafka kafka-console-producer \
-    --bootstrap-server kafka:29092 --topic osprey.actions_input
-
-# Batch from sample file
-cat example_data/sample_events.jsonl | \
+echo '{"send_time":"2026-01-01T00:00:00+00:00","data":{"action_id":1,"action_name":"nostr_kind_7","data":{"id":"test1","pubkey":"abc","kind":7,"created_at":1709000000,"content":"+","tags":[],"sig":"x"}}}' | \
   docker exec -i divine-kafka kafka-console-producer \
     --bootstrap-server kafka:29092 --topic osprey.actions_input
 ```
 
 ### Via the Nostr bridge
 
-The bridge automatically subscribes to the configured relay (`RELAY_URL`, default `wss://relay.divine.video`) and forwards all events to the `nostr-events` Kafka topic. To test with a different relay:
-
-```bash
-RELAY_URL=wss://relay.damus.io docker compose up -d nostr-kafka-bridge
-```
+The bridge subscribes to the configured relay (`RELAY_URL`, default `ws://host.docker.internal:4444`) and converts raw Nostr events into the envelope format automatically.
 
 ## Checking Results in ClickHouse
 
 ```bash
 # Count all events
-curl 'http://localhost:8123' --data 'SELECT count() FROM osprey.osprey_events'
+curl 'http://localhost:8123/?user=default&password=clickhouse' --data 'SELECT count() FROM osprey.osprey_events'
 
-# View recent events
-curl 'http://localhost:8123' --data 'SELECT * FROM osprey.osprey_events ORDER BY __time DESC LIMIT 10 FORMAT Pretty'
+# View recent events with verdicts
+curl 'http://localhost:8123/?user=default&password=clickhouse' --data 'SELECT EventId, Kind, __verdicts, __rule_hits FROM osprey.osprey_events ORDER BY __time DESC LIMIT 10 FORMAT Pretty'
 
 # Check rule hit stats
-curl 'http://localhost:8123' --data 'SELECT * FROM osprey.rule_hits_hourly ORDER BY hour DESC LIMIT 20 FORMAT Pretty'
-
-# Query by event type
-curl 'http://localhost:8123' --data "SELECT * FROM osprey.osprey_events WHERE EventType = 'nostr_kind_1' FORMAT Pretty"
+curl 'http://localhost:8123/?user=default&password=clickhouse' --data 'SELECT * FROM osprey.rule_hits_hourly ORDER BY hour DESC LIMIT 20 FORMAT Pretty'
 ```
 
-## Writing & Testing SML Rules
+## Seeding Entity Labels
 
-1. Add or edit rule files in `divine/rules/` (SML format)
-2. Restart the worker to pick up changes:
-   ```bash
-   docker compose restart osprey-worker
-   ```
-3. Send a test event and check ClickHouse for the `__rule_hits` column to verify your rule fired
+Seed trusted reporters for auto-hide rules:
 
-Rules are mounted at `/app/divine_rules` inside the worker container. The plugin path is `/app/divine_plugins/src`.
+```bash
+./scripts/seed-trusted-reporters.sh
+```
 
-## Deploying to PoC Environment
+Or manually via docker compose (format must match `EntityLabels.serialize()`):
 
-The PoC environment runs on the Divine infrastructure. To deploy:
+```bash
+docker compose exec postgres psql -U osprey -d osprey -c "
+INSERT INTO entity_labels (entity_key, labels)
+VALUES ('Pubkey/<hex_pubkey>',
+  '{\"labels\": {\"trusted_reporter\": {\"status\": 1, \"reasons\": {\"seed\": {\"pending\": false, \"description\": \"\", \"features\": {}, \"created_at\": \"2026-01-01T00:00:00+00:00\", \"expires_at\": null}}, \"previous_states\": []}}}')
+ON CONFLICT (entity_key) DO UPDATE SET labels = EXCLUDED.labels;
+"
+```
 
-1. **Build & push images:**
-   ```bash
-   docker build -t divine-worker -f divine/Dockerfile.worker .
-   docker build -t nostr-kafka-bridge -f divine/nostr-kafka-bridge/Dockerfile .
-   # Tag and push to your registry
-   ```
+## Full Test Data
 
-2. **Apply ClickHouse schema** to the PoC ClickHouse instance:
-   ```bash
-   CLICKHOUSE_HOST=<poc-clickhouse-host> ./divine/scripts/init-clickhouse.sh
-   ```
+For comprehensive test data covering all rule types (requires `nak` CLI + local relay):
 
-3. **Configure environment variables** on the PoC worker to point to the PoC Kafka and ClickHouse instances.
+```bash
+./scripts/seed-test-data.sh
+```
 
 ## Teardown
 
@@ -114,3 +119,4 @@ docker compose down -v --remove-orphans
 - **Worker not writing to ClickHouse?** Check logs: `docker logs divine-worker`
 - **Kafka connection issues?** Ensure topics exist: `docker exec divine-kafka kafka-topics --bootstrap-server kafka:29092 --list`
 - **ClickHouse schema errors?** Re-run: `./scripts/init-clickhouse.sh`
+- **HasLabel errors?** Check entity_labels table: `docker compose exec postgres psql -U osprey -d osprey -c 'SELECT * FROM entity_labels'`

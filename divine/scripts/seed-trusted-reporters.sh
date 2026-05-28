@@ -22,8 +22,9 @@ TRUSTED_PUBKEYS=(
 )
 
 # --- Label payload ---
-# Matches EntityLabels.serialize() format from labels_service.py
-LABEL_JSON='{"labels": {"trusted_reporter": {"added_at": null, "expires_at": null}}}'
+# Must match EntityLabels.serialize() → LabelState.serialize() → LabelReasons format.
+# status=1 is LabelStatus.ADDED; reasons dict keyed by reason name.
+LABEL_JSON='{"labels": {"trusted_reporter": {"status": 1, "reasons": {"seed": {"pending": false, "description": "Seeded trusted reporter", "features": {}, "created_at": "2026-01-01T00:00:00+00:00", "expires_at": null}}, "previous_states": []}}}'
 
 generate_sql() {
   for pubkey in "${TRUSTED_PUBKEYS[@]}"; do
@@ -47,8 +48,11 @@ elif [[ "${1:-}" == "--dry-run" ]]; then
   generate_sql
 else
   echo "Seeding trusted_reporter labels on local dev..."
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  DIVINE_DIR="$SCRIPT_DIR/.."
   SQL=$(generate_sql)
-  psql -h localhost -U osprey -d osprey -c "$SQL"
+  docker compose -f "$DIVINE_DIR/docker-compose.yaml" exec -T postgres \
+    psql -U osprey -d osprey -c "$SQL"
 fi
 
 echo "Done. Seeded ${#TRUSTED_PUBKEYS[@]} trusted reporter(s)."
