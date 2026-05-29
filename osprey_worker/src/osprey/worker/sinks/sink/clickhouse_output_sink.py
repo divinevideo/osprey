@@ -47,6 +47,14 @@ class ClickHouseOutputSink(BaseOutputSink):
     def will_do_work(self, result: ExecutionResult) -> bool:
         return True
 
+    _PASSTHROUGH_INTERNAL_KEYS = frozenset(
+        {
+            '__verdicts',
+            '__entity_label_mutations',
+            '__ban_nostr_event',
+        }
+    )
+
     def push(self, result: ExecutionResult) -> None:
         try:
             features = json.loads(result.extracted_features_json)
@@ -56,10 +64,11 @@ class ClickHouseOutputSink(BaseOutputSink):
                 '__action_id': result.action.action_id,
             }
 
-            # Add features, skipping internal __ fields already handled above.
-            # Skip None values — ClickHouse will use column defaults.
+            rule_hits: dict[str, bool] = {}
             for key, val in features.items():
                 if key.startswith('__'):
+                    if key in self._PASSTHROUGH_INTERNAL_KEYS and val is not None:
+                        row[key] = json.dumps(val) if isinstance(val, (list, dict)) else val
                     continue
                 if val is None:
                     continue
@@ -67,29 +76,12 @@ class ClickHouseOutputSink(BaseOutputSink):
                     row[key] = json.dumps(val)
                 elif isinstance(val, bool):
                     row[key] = int(val)
+                    rule_hits[key] = val
                 else:
                     row[key] = val
 
-            # Persist entity label mutations from features
-            label_mutations = features.get('__entity_label_mutations')
-            if label_mutations:
-                row['__entity_label_mutations'] = (
-                    json.dumps(label_mutations) if isinstance(label_mutations, list) else str(label_mutations)
-                )
-
-            # Add verdict info if present
-            if result.verdicts:
-                row['__verdicts'] = json.dumps([v.value if hasattr(v, 'value') else str(v) for v in result.verdicts])
-
-            # Add rule hit info from validator_results
-            if result.validator_results:
-                row['__rule_hits'] = json.dumps(
-                    {
-                        str(getattr(name, '__name__', name)): bool(val)
-                        for name, val in result.validator_results.items()
-                        if val is not None
-                    }
-                )
+            if rule_hits:
+                row['__rule_hits'] = json.dumps(rule_hits)
 
             self._buffer.append(row)
 
@@ -106,9 +98,27 @@ class ClickHouseOutputSink(BaseOutputSink):
 
         rows_to_flush = len(self._buffer)
         try:
-            # clickhouse-connect requires column_names + list-of-lists, not dicts
-            column_names = list(self._buffer[0].keys())
-            data = [list(row.get(col, '') for col in column_names) for row in self._buffer]
+            # Build union of all column names across the batch. Different
+            # event types produce different feature keys, so row dicts
+            # vary within a batch.
+            all_columns: dict[str, Any] = {}
+            for row in self._buffer:
+                for col, val in row.items():
+                    if col not in all_columns or all_columns[col] is None:
+                        all_columns[col] = val
+            column_names = list(all_columns.keys())
+
+            # Infer a type-appropriate default for missing values.
+            # ClickHouse columns are not Nullable, so None is not valid.
+            col_defaults: dict[str, Any] = {}
+            for col in column_names:
+                sample = all_columns[col]
+                if isinstance(sample, (int, float)):
+                    col_defaults[col] = 0
+                else:
+                    col_defaults[col] = ''
+
+            data = [[row.get(col, col_defaults[col]) for col in column_names] for row in self._buffer]
             self._client.insert(
                 f'{self._database}.{self._table}',
                 data=data,

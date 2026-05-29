@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `NoteText`             String DEFAULT '',
     `MentionedPubkeys`     String DEFAULT '[]',
     `ReportedEventId`      String DEFAULT '',
+    `ReportedEvent`        String DEFAULT '',
     `ReportedPubkey`       String DEFAULT '',
     `ReportReason`         String DEFAULT '',
 
@@ -38,6 +39,9 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `LabelTargetEvent`     String DEFAULT '',
     `LabelContentHash`     String DEFAULT '',
     `LabelConfidence`      Float32 DEFAULT 0,
+    `LabelSignerPubkey`    String DEFAULT '',
+    `LabelTargetPubkey`    String DEFAULT '',
+    `LabelTargetEventEntity` String DEFAULT '',
 
     -- Video event fields
     `VideoHash`            String DEFAULT '',
@@ -60,6 +64,10 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `NeedsReview`          UInt8 DEFAULT 0,
     `ModerationServiceBan` UInt8 DEFAULT 0,
     `RejectedLabel`        UInt8 DEFAULT 0,
+    `FirstSexualReport`    UInt8 DEFAULT 0,
+    `FirstViolenceReport`  UInt8 DEFAULT 0,
+    `ThresholdSexualReport` UInt8 DEFAULT 0,
+    `ThresholdViolenceReport` UInt8 DEFAULT 0,
     `__entity_label_mutations` String DEFAULT '',
     `__ban_nostr_event`    String DEFAULT '',
 
@@ -80,6 +88,18 @@ PARTITION BY toYYYYMM(__time)
 ORDER BY (__time, __action_id)
 TTL toDateTime(__time) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
+
+-- Upgrade DDL: add columns that may be missing on tables created from older schemas.
+-- ALTER TABLE ... ADD COLUMN IF NOT EXISTS is idempotent on fresh and existing tables.
+-- AFTER clauses omitted so these work regardless of which columns already exist.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReportedEvent` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelSignerPubkey` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelTargetPubkey` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelTargetEventEntity` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSexualReport` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstViolenceReport` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdSexualReport` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceReport` UInt8 DEFAULT 0;
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly

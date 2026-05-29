@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 import requests
 from osprey.engine.executor.execution_context import ExecutionResult
@@ -34,8 +34,8 @@ class RelayManagerSink(BaseOutputSink):
         if not self._api_key:
             logger.warning('DIVINE_RELAY_MANAGER_API_KEY not set. Requests will fail auth.')
 
-    def _headers(self) -> Dict[str, str]:
-        h: Dict[str, str] = {'Content-Type': 'application/json'}
+    def _headers(self) -> dict[str, str]:
+        h: dict[str, str] = {'Content-Type': 'application/json'}
         if self._api_key:
             h['X-Admin-Key'] = self._api_key
         return h
@@ -46,42 +46,30 @@ class RelayManagerSink(BaseOutputSink):
         return len(result.effects.get(BanEventEffect, [])) > 0
 
     def push(self, result: ExecutionResult) -> None:
-        effects: List[BanEventEffect] = result.effects.get(BanEventEffect, [])
+        effects: list[BanEventEffect] = result.effects.get(BanEventEffect, [])
         for effect in effects:
             assert isinstance(effect, BanEventEffect)
-            event_banned = False
-            try:
-                self._ban_event(effect)
-                event_banned = True
-            except Exception:
-                pass  # Already logged in _ban_event
+            self._ban_event(effect)
 
             if effect.pubkey:
-                try:
-                    self._ban_pubkey(effect)
-                except Exception:
-                    pass  # Already logged in _ban_pubkey
+                self._ban_pubkey(effect)
 
-            if event_banned:
-                try:
-                    self._publish_label_event(effect)
-                except Exception:
-                    # Re-raise so the sink retry path re-attempts the whole push.
-                    # Ban and pubkey-ban are idempotent, so replaying them is safe.
-                    # Label publish is NOT idempotent (each attempt creates a new
-                    # signed event), so retries may produce duplicate enforcement
-                    # labels. Acceptable: duplicates are cosmetic, and losing the
-                    # audit trail is worse than duplicating it.
-                    logger.error(
-                        f'Failed to publish enforcement label for {effect.event_id} — ban succeeded, label lost'
-                    )
-                    raise
-
-            if not event_banned:
-                raise RuntimeError(f'Failed to ban event {effect.event_id}')
+            # Only publish the enforcement label after all required bans succeed.
+            # Both bans are idempotent so replaying on retry is safe. Label publish
+            # is NOT idempotent (creates a new signed event each time), so retries
+            # may produce duplicate labels -- acceptable since losing the audit
+            # trail is worse than duplicating it.
+            try:
+                self._publish_label_event(effect)
+            except Exception:
+                logger.error(
+                    'Enforcement label failed for %s -- bans succeeded, label lost',
+                    effect.event_id,
+                )
+                raise
 
     def _ban_event(self, effect: BanEventEffect) -> None:
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             'method': 'banevent',
             'params': [effect.event_id, effect.reason],
         }
@@ -93,13 +81,13 @@ class RelayManagerSink(BaseOutputSink):
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            logger.info(f'Banned event {effect.event_id} via relay-manager')
+            logger.info('Banned event %s via relay-manager', effect.event_id)
         except Exception:
-            logger.exception(f'Failed to ban event {effect.event_id} via relay-manager')
+            logger.exception('Failed to ban event %s via relay-manager', effect.event_id)
             raise
 
     def _ban_pubkey(self, effect: BanEventEffect) -> None:
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             'method': 'banpubkey',
             'params': [effect.pubkey, effect.reason],
         }
@@ -111,9 +99,9 @@ class RelayManagerSink(BaseOutputSink):
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            logger.info(f'Banned pubkey {effect.pubkey} via relay-manager')
+            logger.info('Banned pubkey %s via relay-manager', effect.pubkey)
         except Exception:
-            logger.exception(f'Failed to ban pubkey {effect.pubkey} via relay-manager')
+            logger.exception('Failed to ban pubkey %s via relay-manager', effect.pubkey)
             raise
 
     def _publish_label_event(self, effect: BanEventEffect) -> None:
@@ -122,7 +110,7 @@ class RelayManagerSink(BaseOutputSink):
         Uses moderation/enforcement namespace (not moderation/resolution) so
         relay-manager doesn't treat it as a human review decision.
         """
-        tags: List[List[str]] = [
+        tags: list[list[str]] = [
             ['L', 'moderation/enforcement'],
             ['l', 'auto_hidden', 'moderation/enforcement'],
             ['e', effect.event_id],
@@ -130,7 +118,7 @@ class RelayManagerSink(BaseOutputSink):
         if effect.pubkey:
             tags.append(['p', effect.pubkey])
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             'kind': 1985,
             'content': effect.reason,
             'tags': tags,
@@ -143,9 +131,9 @@ class RelayManagerSink(BaseOutputSink):
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            logger.info(f'Published enforcement label for event {effect.event_id}')
+            logger.info('Published enforcement label for event %s', effect.event_id)
         except Exception:
-            logger.exception(f'Failed to publish enforcement label for event {effect.event_id}')
+            logger.exception('Failed to publish enforcement label for event %s', effect.event_id)
             raise
 
     def stop(self) -> None:
