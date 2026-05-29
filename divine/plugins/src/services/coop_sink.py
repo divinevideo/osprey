@@ -11,6 +11,7 @@ from osprey.worker.sinks.sink.output_sink import BaseOutputSink
 logger = get_logger(__name__)
 
 ACTIONABLE_VERDICTS = {'flag_for_review', 'restrict', 'auto_hide', 'ban'}
+VERDICT_SEVERITY = {'flag_for_review': 0, 'restrict': 1, 'auto_hide': 2, 'ban': 3}
 
 
 class COOPSink(BaseOutputSink):
@@ -51,26 +52,40 @@ class COOPSink(BaseOutputSink):
         return any(v.verdict.lower() in ACTIONABLE_VERDICTS for v in result.verdicts)
 
     def push(self, result: ExecutionResult) -> None:
+        best: dict[str, VerdictEffect] = {}
         for verdict in result.verdicts:
-            if verdict.verdict.lower() in ACTIONABLE_VERDICTS:
-                self._submit_content(verdict, result)
+            key = verdict.verdict.lower()
+            if key not in ACTIONABLE_VERDICTS:
+                continue
+            content_id = self._resolve_content_id(result.extracted_features)
+            if content_id is None:
+                logger.warning(
+                    'COOPSink: no resolvable content ID for action_id=%s, skipping',
+                    result.action.action_id,
+                )
+                continue
+            prev = best.get(content_id)
+            if prev is None or VERDICT_SEVERITY.get(key, 0) > VERDICT_SEVERITY.get(prev.verdict.lower(), 0):
+                best[content_id] = verdict
+        for content_id, verdict in best.items():
+            self._submit_content(content_id, verdict, result)
 
-    def _resolve_content_id(self, features: dict[str, Any], fallback: str) -> str:
+    def _resolve_content_id(self, features: dict[str, Any]) -> str | None:
         """Resolve the actual moderated content ID, not the wrapper event.
 
         Kind 1984 reports and kind 1985 labels wrap a target event; EventId
         is the wrapper. COOP should key on the moderated content instead.
+        Returns None if no real event ID is available.
         """
-        for key in ('LabelTargetEvent', 'ReportedEventId'):
+        for key in ('LabelTargetEvent', 'ReportedEventId', 'EventId'):
             value = features.get(key)
             if value:
                 return str(value)
-        return features.get('EventId', fallback)
+        return None
 
-    def _submit_content(self, verdict: VerdictEffect, result: ExecutionResult) -> None:
+    def _submit_content(self, content_id: str, verdict: VerdictEffect, result: ExecutionResult) -> None:
         features = result.extracted_features
         wrapper_event_id = features.get('EventId', str(result.action.action_id))
-        content_id = self._resolve_content_id(features, str(result.action.action_id))
 
         content: dict[str, Any] = {
             'event_id': content_id,
