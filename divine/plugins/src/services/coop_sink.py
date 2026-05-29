@@ -55,12 +55,26 @@ class COOPSink(BaseOutputSink):
             if verdict.verdict.lower() in ACTIONABLE_VERDICTS:
                 self._submit_content(verdict, result)
 
+    def _resolve_content_id(self, features: dict[str, Any], fallback: str) -> str:
+        """Resolve the actual moderated content ID, not the wrapper event.
+
+        Kind 1984 reports and kind 1985 labels wrap a target event; EventId
+        is the wrapper. COOP should key on the moderated content instead.
+        """
+        for key in ('LabelTargetEvent', 'ReportedEventId'):
+            value = features.get(key)
+            if value:
+                return str(value)
+        return features.get('EventId', fallback)
+
     def _submit_content(self, verdict: VerdictEffect, result: ExecutionResult) -> None:
         features = result.extracted_features
-        event_id = features.get('EventId', str(result.action.action_id))
+        wrapper_event_id = features.get('EventId', str(result.action.action_id))
+        content_id = self._resolve_content_id(features, str(result.action.action_id))
 
         content: dict[str, Any] = {
-            'event_id': event_id,
+            'event_id': content_id,
+            'source_event_id': wrapper_event_id,
             'pubkey': features.get('Pubkey', ''),
             'kind': features.get('Kind'),
             'created_at': features.get('CreatedAt'),
@@ -85,7 +99,7 @@ class COOPSink(BaseOutputSink):
         user_id = str(reported_pubkey) if reported_pubkey else features.get('Pubkey', '')
 
         payload: dict[str, Any] = {
-            'contentId': event_id,
+            'contentId': content_id,
             'contentType': self._content_type,
             'userId': user_id,
             'content': content,
@@ -101,10 +115,14 @@ class COOPSink(BaseOutputSink):
             )
             resp.raise_for_status()
             logger.info(
-                'Submitted to COOP: event=%s verdict=%s kind=%s', event_id, verdict.verdict, features.get('Kind')
+                'Submitted to COOP: content=%s source=%s verdict=%s kind=%s',
+                content_id,
+                wrapper_event_id,
+                verdict.verdict,
+                features.get('Kind'),
             )
         except Exception:
-            logger.exception('Failed to submit to COOP: event=%s verdict=%s', event_id, verdict.verdict)
+            logger.exception('Failed to submit to COOP: content=%s verdict=%s', content_id, verdict.verdict)
             sentry_sdk.capture_exception()
 
     def stop(self) -> None:

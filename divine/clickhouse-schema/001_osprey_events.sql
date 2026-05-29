@@ -89,6 +89,17 @@ ORDER BY (__time, __action_id)
 TTL toDateTime(__time) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
 
+-- Upgrade DDL: add columns that may be missing on tables created from older schemas.
+-- ALTER TABLE ... ADD COLUMN IF NOT EXISTS is idempotent on fresh and existing tables.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReportedEvent` String DEFAULT '' AFTER `ReportedEventId`;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelSignerPubkey` String DEFAULT '' AFTER `LabelConfidence`;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelTargetPubkey` String DEFAULT '' AFTER `LabelSignerPubkey`;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelTargetEventEntity` String DEFAULT '' AFTER `LabelTargetPubkey`;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSexualReport` UInt8 DEFAULT 0 AFTER `RejectedLabel`;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstViolenceReport` UInt8 DEFAULT 0 AFTER `FirstSexualReport`;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdSexualReport` UInt8 DEFAULT 0 AFTER `FirstViolenceReport`;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceReport` UInt8 DEFAULT 0 AFTER `ThresholdSexualReport`;
+
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly
 ENGINE = SummingMergeTree()
