@@ -52,23 +52,26 @@ class COOPSink(BaseOutputSink):
         return any(v.verdict.lower() in ACTIONABLE_VERDICTS for v in result.verdicts)
 
     def push(self, result: ExecutionResult) -> None:
-        best: dict[str, VerdictEffect] = {}
+        content_id = self._resolve_content_id(result.extracted_features)
+        if content_id is None:
+            logger.warning(
+                'COOPSink: no resolvable content ID for action_id=%s, skipping',
+                result.action.action_id,
+            )
+            return
+
+        best_verdict: VerdictEffect | None = None
         for verdict in result.verdicts:
             key = verdict.verdict.lower()
             if key not in ACTIONABLE_VERDICTS:
                 continue
-            content_id = self._resolve_content_id(result.extracted_features)
-            if content_id is None:
-                logger.warning(
-                    'COOPSink: no resolvable content ID for action_id=%s, skipping',
-                    result.action.action_id,
-                )
-                continue
-            prev = best.get(content_id)
-            if prev is None or VERDICT_SEVERITY.get(key, 0) > VERDICT_SEVERITY.get(prev.verdict.lower(), 0):
-                best[content_id] = verdict
-        for content_id, verdict in best.items():
-            self._submit_content(content_id, verdict, result)
+            if best_verdict is None or VERDICT_SEVERITY.get(key, 0) > VERDICT_SEVERITY.get(
+                best_verdict.verdict.lower(), 0
+            ):
+                best_verdict = verdict
+
+        if best_verdict is not None:
+            self._submit_content(content_id, best_verdict, result)
 
     def _resolve_content_id(self, features: dict[str, Any]) -> str | None:
         """Resolve the actual moderated content ID, not the wrapper event.
