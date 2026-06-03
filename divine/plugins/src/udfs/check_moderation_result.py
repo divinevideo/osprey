@@ -1,17 +1,15 @@
 import os
-import re
 import time
 from typing import Dict, Tuple
 
 import requests
+from media_hash import HEX64_RE
 from osprey.engine.executor.execution_context import ExecutionContext
 from osprey.engine.udf.arguments import ArgumentsBase
 from osprey.engine.udf.base import UDFBase
 from osprey.worker.lib.osprey_shared.logging import get_logger
 
 logger = get_logger(__name__)
-
-_HEX64_RE = re.compile(r'^[0-9a-f]{64}$', re.IGNORECASE)
 
 # In-memory cache: video_hash -> (result_string, expiry_timestamp)
 _cache: Dict[str, Tuple[str, float]] = {}
@@ -49,7 +47,7 @@ class CheckModerationResult(UDFBase[CheckModerationResultArguments, str]):
         if not video_hash:
             return 'unknown'
 
-        if not _HEX64_RE.match(video_hash):
+        if not HEX64_RE.match(video_hash):
             logger.warning(f'Invalid video_hash format: {video_hash[:20]}...')
             return 'unknown'
 

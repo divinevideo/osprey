@@ -46,9 +46,15 @@ ConfirmedNudity = Rule(
     LabelValue in ['nudity', 'sexual', 'explicit', 'pornography'],
     LabelSource == 'human-moderator',
     not LabelRejected,
+    # Both fields are required for an age-restrict. LabelContentHash is optional,
+    # so a missing value resolves to None and `!= ''` alone would pass (None != '');
+    # pair it with `!= None`. Partial data is routed to review below, not here.
+    LabelTargetEvent != None,
+    LabelTargetEvent != '',
+    LabelContentHash != None,
     LabelContentHash != '',
   ],
-  description='Human confirmed nudity/sexual content (with media hash)',
+  description='Human confirmed nudity/sexual content (with event target and media hash)',
 )
 
 WhenRules(
@@ -70,9 +76,13 @@ ConfirmedViolence = Rule(
     LabelValue in ['violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
     not LabelRejected,
+    # See ConfirmedNudity: require both fields with engine-honored None checks.
+    LabelTargetEvent != None,
+    LabelTargetEvent != '',
+    LabelContentHash != None,
     LabelContentHash != '',
   ],
-  description='Human confirmed violence/gore content (with media hash)',
+  description='Human confirmed violence/gore content (with event target and media hash)',
 )
 
 WhenRules(
@@ -82,6 +92,47 @@ WhenRules(
     LabelAdd(entity=LabelTargetEventEntity, label='age_restricted'),
     LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='restrict'),
+  ],
+)
+
+# Human confirmed nudity/violence but the label has no event target (hash only).
+# Can't age-restrict the media automatically without the event, but the content
+# hash is actionable, so route to manual review (mirrors the CSAM hash-only path).
+# Two rules because the engine distinguishes a null target from an empty one.
+ConfirmedAgeRestrictHashOnlyNullTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    LabelNamespace == 'content-warning',
+    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    LabelContentHash != None,
+    LabelContentHash != '',
+    LabelTargetEvent == None,
+  ],
+  description='Human confirmed nudity/violence (hash only, null event target)',
+)
+
+ConfirmedAgeRestrictHashOnlyEmptyTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    LabelNamespace == 'content-warning',
+    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    LabelContentHash != None,
+    LabelContentHash != '',
+    LabelTargetEvent == '',
+  ],
+  description='Human confirmed nudity/violence (hash only, empty event target)',
+)
+
+WhenRules(
+  rules_any=[ConfirmedAgeRestrictHashOnlyNullTarget, ConfirmedAgeRestrictHashOnlyEmptyTarget],
+  then=[
+    DeclareVerdict(verdict='flag_for_review'),
   ],
 )
 
