@@ -2,6 +2,7 @@ import os
 from typing import Any
 
 import requests
+from media_hash import HEX64_RE
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
@@ -146,6 +147,13 @@ class RelayManagerSink(BaseOutputSink):
             raise
 
     def _age_restrict_media(self, effect: AgeRestrictEffect) -> None:
+        # The hash originates from a kind 1985 label (bridge-set from the imeta x tag
+        # or metadata sha256) and is not validated upstream. A non-64-hex value is
+        # rejected downstream in the moderate-media path, so a malformed one would just
+        # waste an enforcement call plus retries -- skip it here, matching CheckModerationResult.
+        if not HEX64_RE.match(effect.sha256):
+            logger.warning('Skipping age-restrict, malformed sha256: %s', effect.sha256[:20])
+            return
         payload: dict[str, Any] = {
             'sha256': effect.sha256,
             'action': 'AGE_RESTRICTED',
