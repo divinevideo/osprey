@@ -31,3 +31,4 @@ cd divine && docker compose up -d --build
 - Labels must be registered in `divine/rules/config/labels.yaml` with correct `valid_for` entity types or the worker crashes on startup
 - `RelayManagerSink` handles enforcement (bans) and Kind 1985 label publishing
 - CI builds images on push to `divine/*` branches
+- Release tags use `divine-v<semver>` for stable releases only (e.g., `divine-v0.1.0`). The `divine-` prefix avoids collisions with upstream roostorg tags. Do NOT use plain `v*` tags. Do NOT use pre-release tags — use `divine/*` branch builds for pre-release testing instead. Pushing a `divine-v*` tag produces Docker image tags `<version>` and `<major>.<minor>`.
