@@ -28,10 +28,14 @@ _action_counter = 0
 # Divine clients use different reason vocabularies. Normalize to canonical
 # values that SML rules can match consistently.
 #
-# Canonical values: csam, nudity, violence, ai_generated, spam, impersonation,
-# illegal, harassment, other
+# Canonical values: csam, child_safety, underage_user, nudity, violence,
+# ai_generated, spam, impersonation, illegal, harassment, other
 # Mobile maps csam -> 'illegal' and sexual content -> 'nudity' per NIP-56.
-# Web passes raw reasons (csam, harassment, sexual-content, etc.).
+# Web passes raw reasons (csam, harassment, sexual-content, etc.). NOTE: divine-web
+# folds "child safety concern" into its CSAM reason ('csam'), so web child-safety
+# reports route to CSAM handling; the child_safety queue is fed by divine-mobile's
+# 'childSafety' (-> 'childsafety' -> 'child_safety'). No client emits a hyphenated
+# 'child-safety' token, so none is aliased.
 # NB: divine-web sends hyphenated lowercase reasons (e.g. 'sexual-content',
 # 'ai-generated'); divine-mobile sends camelCase reason.name (e.g. 'sexualContent',
 # 'aiGenerated', 'childSafety') inside an 'NS-' NIP-32 label. Both arrive here
@@ -258,7 +262,7 @@ def _wrap_nostr_event(event: dict) -> dict:
         # for trusted reporters via the CSAM rule.
         if not raw_reason:
             content_lower = event.get('content', '').strip().lower()
-            for reason in ('csam', 'sexual_minors', 'nudity', 'violence', 'harassment', 'spam', 'impersonation'):
+            for reason in ('csam', 'sexual_minors', 'child_safety', 'nudity', 'violence', 'harassment', 'spam', 'impersonation'):
                 if content_lower == reason:
                     raw_reason = reason
                     break
