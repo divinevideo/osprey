@@ -32,14 +32,29 @@ _action_counter = 0
 # illegal, harassment, other
 # Mobile maps csam -> 'illegal' and sexual content -> 'nudity' per NIP-56.
 # Web passes raw reasons (csam, harassment, sexual-content, etc.).
+# NB: divine-web sends hyphenated lowercase reasons (e.g. 'sexual-content',
+# 'ai-generated'); divine-mobile sends camelCase reason.name (e.g. 'sexualContent',
+# 'aiGenerated', 'childSafety') inside an 'NS-' NIP-32 label. Both arrive here
+# lowercased after _normalize_report_reason's strip().lower(), so mobile's
+# camelCase collapses to a single token ('sexualcontent', 'childsafety', ...).
+# We must alias BOTH spellings or the report falls through to General Review and
+# misses the SML auto-hide/threshold rules.
 _REASON_ALIASES = {
-    # CSAM variants -- mobile sends 'illegal' for CSAM but also for violence/copyright.
-    # We can't distinguish from 'illegal' alone, so we keep it as-is.
-    # The 'sexual_minors' and 'csam' forms are unambiguous.
+    # CSAM -- 'illegal' is mobile's overload for CSAM/violence/copyright, so we
+    # keep it as-is for human triage. 'sexual_minors' and 'csam' are unambiguous.
     'sexual_minors': 'csam',
     'ns-csam': 'csam',
-    # Nudity/sexual content
+    # Child safety -- distinct from CSAM and from age-review. Routes to its own
+    # "Child Safety" queue for human triage; a moderator escalates to csam if warranted.
+    'childsafety': 'child_safety',
+    'ns-childsafety': 'child_safety',
+    # Underage user (age review) -- feeds the relay-manager age-review case system
+    # (15-day clock, age tiers, suspension). Routes to its own "Age Review" queue.
+    'underageuser': 'underage_user',
+    'ns-underageuser': 'underage_user',
+    # Nudity/sexual content (incl. divine-mobile 'sexualContent' -> 'sexualcontent')
     'sexual-content': 'nudity',
+    'sexualcontent': 'nudity',
     'sexual': 'nudity',
     'explicit': 'nudity',
     'pornography': 'nudity',
@@ -52,8 +67,13 @@ _REASON_ALIASES = {
     'ns-spam': 'spam',
     # Violence
     'ns-violence': 'violence',
-    # Other
+    # AI-generated (divine-web 'ai-generated', divine-mobile 'aiGenerated')
+    'ai-generated': 'ai_generated',
+    'aigenerated': 'ai_generated',
+    # Other (divine-web 'false-info', divine-mobile 'falseInformation')
     'false-information': 'other',
+    'false-info': 'other',
+    'falseinformation': 'other',
     'ns-other': 'other',
     # MOD namespace labels from moderation-service kind 1984 reports.
     # These are the raw l-tag values: NS (Not Safe), VI (Violence), AI (AI-generated).
