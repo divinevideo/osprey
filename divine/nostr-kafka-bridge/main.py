@@ -31,11 +31,12 @@ _action_counter = 0
 # Canonical values: csam, child_safety, underage_user, nudity, violence,
 # ai_generated, spam, impersonation, illegal, harassment, other
 # Mobile maps csam -> 'illegal' and sexual content -> 'nudity' per NIP-56.
-# Web passes raw reasons (csam, harassment, sexual-content, etc.). NOTE: divine-web
-# folds "child safety concern" into its CSAM reason ('csam'), so web child-safety
-# reports route to CSAM handling; the child_safety queue is fed by divine-mobile's
-# 'childSafety' (-> 'childsafety' -> 'child_safety'). No client emits a hyphenated
-# 'child-safety' token, so none is aliased.
+# Web passes raw reasons (csam, harassment, sexual-content, etc.). divine-web#364
+# split child safety into three distinct categories, so divine-web now sends the
+# hyphenated tokens 'child-safety', 'csam', and 'underage-user' (alongside the
+# existing 'sexual-content', 'ai-generated', 'false-info'). The hyphenated web forms
+# are aliased to canonical below; divine-mobile's camelCase 'childSafety' /
+# 'underageUser' collapse to 'childsafety' / 'underageuser'.
 # NB: divine-web sends hyphenated lowercase reasons (e.g. 'sexual-content',
 # 'ai-generated'); divine-mobile sends camelCase reason.name (e.g. 'sexualContent',
 # 'aiGenerated', 'childSafety') inside an 'NS-' NIP-32 label. Both arrive here
@@ -50,11 +51,13 @@ _REASON_ALIASES = {
     'ns-csam': 'csam',
     # Child safety -- distinct from CSAM and from age-review. Routes to its own
     # "Child Safety" queue for human triage; a moderator escalates to csam if warranted.
-    'childsafety': 'child_safety',
+    'child-safety': 'child_safety',   # divine-web#364 (hyphenated web token)
+    'childsafety': 'child_safety',    # divine-mobile camelCase collapsed
     'ns-childsafety': 'child_safety',
     # Underage user (age review) -- feeds the relay-manager age-review case system
     # (15-day clock, age tiers, suspension). Routes to its own "Age Review" queue.
-    'underageuser': 'underage_user',
+    'underage-user': 'underage_user',  # divine-web#364 (hyphenated web token)
+    'underageuser': 'underage_user',   # divine-mobile camelCase collapsed
     'ns-underageuser': 'underage_user',
     # Nudity/sexual content (incl. divine-mobile 'sexualContent' -> 'sexualcontent')
     'sexual-content': 'nudity',
