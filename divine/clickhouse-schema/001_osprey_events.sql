@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `PermanentBan`         UInt8 DEFAULT 0,
     `TrustedReporterCSAM`  UInt8 DEFAULT 0,
     `TrustedReporterNSFW`  UInt8 DEFAULT 0,
+    `TrustedReporterChildSafety` UInt8 DEFAULT 0,
+    `TrustedReporterHarassment`  UInt8 DEFAULT 0,
     `ConfirmedNudity`      UInt8 DEFAULT 0,
     `ConfirmedViolence`    UInt8 DEFAULT 0,
     `ConfirmedCSAM`        UInt8 DEFAULT 0,
@@ -100,6 +102,11 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSexualReport` UI
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstViolenceReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdSexualReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceReport` UInt8 DEFAULT 0;
+-- New rule columns must be added here AND to the CREATE TABLE list above, or the
+-- ClickHouse output sink fails the whole batch insert (it writes each rule as a
+-- column). Coupled to divine/rules/rules/reports/trusted_reporter_categories.sml.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterChildSafety` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterHarassment` UInt8 DEFAULT 0;
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly
