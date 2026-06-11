@@ -25,6 +25,19 @@ cd divine && docker compose up -d --build
 - `divine/rules/` — SML models, rules, and config (labels.yaml)
 - `divine/clickhouse-schema/` — analytics tables
 
+## Configuration gotchas & doc discipline
+
+Before changing report routing, rules, queues, or the bridge, read
+`~/code/support-trust-safety/docs/moderation/coop-osprey-configuration-gotchas.md`
+and **re-verify the live ecosystem state** (it drifts). When you learn something or
+change configuration, UPDATE that doc and the companion docs in the same change.
+Key couplings captured there:
+- The report_reason chain must align across THREE places (bridge `_REASON_ALIASES`
+  → an osprey rule that emits an actionable verdict → coop-setup routing). A queue with
+  no rule stays empty — COOPSink only posts actionable verdicts.
+- Each Rule name becomes a ClickHouse column; adding a rule needs `ADD COLUMN` in
+  `divine/clickhouse-schema/001_osprey_events.sql` or the sink fails the whole batch.
+
 ## Key conventions
 
 - SML rules live in `divine/rules/rules/` grouped by domain (reports, behavioral, content)
