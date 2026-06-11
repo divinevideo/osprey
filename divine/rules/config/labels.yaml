@@ -73,6 +73,16 @@ labels:
     connotation: negative
     description: At least one report of violence received for this event
 
+  child_safety_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one child-safety report received for this event (distinct from CSAM)
+
+  harassment_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one report of harassment received for this event
+
   threshold_met:
     valid_for: [EventId, ReportedEventId]
     connotation: negative
