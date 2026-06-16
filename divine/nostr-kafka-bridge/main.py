@@ -51,13 +51,13 @@ _REASON_ALIASES = {
     'ns-csam': 'csam',
     # Child safety -- distinct from CSAM and from age-review. Routes to its own
     # "Child Safety" queue for human triage; a moderator escalates to csam if warranted.
-    'child-safety': 'child_safety',   # divine-web#364 (hyphenated web token)
-    'childsafety': 'child_safety',    # divine-mobile camelCase collapsed
+    'child-safety': 'child_safety',  # divine-web#364 (hyphenated web token)
+    'childsafety': 'child_safety',  # divine-mobile camelCase collapsed
     'ns-childsafety': 'child_safety',
     # Underage user (age review) -- feeds the relay-manager age-review case system
     # (15-day clock, age tiers, suspension). Routes to its own "Age Review" queue.
     'underage-user': 'underage_user',  # divine-web#364 (hyphenated web token)
-    'underageuser': 'underage_user',   # divine-mobile camelCase collapsed
+    'underageuser': 'underage_user',  # divine-mobile camelCase collapsed
     'ns-underageuser': 'underage_user',
     # Nudity/sexual content (incl. divine-mobile 'sexualContent' -> 'sexualcontent')
     'sexual-content': 'nudity',
@@ -265,7 +265,16 @@ def _wrap_nostr_event(event: dict) -> dict:
         # for trusted reporters via the CSAM rule.
         if not raw_reason:
             content_lower = event.get('content', '').strip().lower()
-            for reason in ('csam', 'sexual_minors', 'child_safety', 'nudity', 'violence', 'harassment', 'spam', 'impersonation'):
+            for reason in (
+                'csam',
+                'sexual_minors',
+                'child_safety',
+                'nudity',
+                'violence',
+                'harassment',
+                'spam',
+                'impersonation',
+            ):
                 if content_lower == reason:
                     raw_reason = reason
                     break
