@@ -28,8 +28,7 @@ _action_counter = 0
 # Divine clients use different reason vocabularies. Normalize to canonical
 # values that SML rules can match consistently.
 #
-# Canonical values: csam, child_safety, underage_user, nudity, violence,
-# ai_generated, spam, impersonation, illegal, harassment, other
+# Canonical values and their downstream owners are defined in CANONICAL_REASONS below.
 # Mobile maps csam -> 'illegal' and sexual content -> 'nudity' per NIP-56.
 # Web passes raw reasons (csam, harassment, sexual-content, etc.). divine-web#364
 # splits child safety into three distinct categories, after which divine-web will send
@@ -45,6 +44,37 @@ _action_counter = 0
 # camelCase collapses to a single token ('sexualcontent', 'childsafety', ...).
 # We must alias BOTH spellings or the report falls through to General Review and
 # misses the SML auto-hide/threshold rules.
+#
+# CANONICAL_REASONS is the SINGLE SOURCE OF TRUTH for the tokens this bridge emits
+# and who owns each one downstream. Every _REASON_ALIASES value must be a key here,
+# and nothing should emit a token that is not catalogued here. Ownership drives where
+# a report is acted on:
+#   'osprey-rule'   -- a divine/rules/rules/reports/*.sml rule matches
+#                      ReportReason == <token> and emits an actionable verdict
+#                      (auto-hide / flag-for-review / threshold).
+#   'relay-manager' -- handled by the relay-manager ReportWatcher + Zendesk path,
+#                      NOT Osprey (e.g. age review's 15-day clock). Osprey has no
+#                      rule for it by design.
+#   'default-queue' -- no dedicated handling; falls to COOP General Review for a
+#                      human to triage.
+# The coupling tests in test_main.py parse the live .sml rules and fail if an
+# 'osprey-rule' token has no matching rule, if a rule references a token not
+# catalogued here, or if an alias resolves to a non-canonical token -- so this
+# table cannot silently drift from the rules.
+CANONICAL_REASONS = {
+    'csam': 'osprey-rule',  # auto_hide (immediate); NCMEC-bound
+    'illegal': 'osprey-rule',  # mobile's CSAM/violence/copyright overload; auto_hide matches it
+    'child_safety': 'osprey-rule',  # FirstChildSafetyReport -> human review queue
+    'harassment': 'osprey-rule',  # FirstHarassmentReport -> human review queue
+    'nudity': 'osprey-rule',  # first/threshold sexual-content rules
+    'violence': 'osprey-rule',  # first/threshold violence rules
+    'ai_generated': 'osprey-rule',  # moderation_service rule
+    'underage_user': 'relay-manager',  # age review: ReportWatcher 15-day clock + Zendesk, not Osprey
+    'spam': 'default-queue',
+    'impersonation': 'default-queue',
+    'other': 'default-queue',
+}
+
 _REASON_ALIASES = {
     # CSAM -- 'illegal' is mobile's overload for CSAM/violence/copyright, so we
     # keep it as-is for human triage. 'sexual_minors' and 'csam' are unambiguous.

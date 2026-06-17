@@ -34,7 +34,13 @@ change configuration, UPDATE that doc and the companion docs in the same change.
 Key couplings captured there:
 - The report_reason chain must align across THREE places (bridge `_REASON_ALIASES`
   → an osprey rule that emits an actionable verdict → coop-setup routing). A queue with
-  no rule stays empty — COOPSink only posts actionable verdicts.
+  no rule stays empty — COOPSink only posts actionable verdicts. The canonical token
+  vocabulary + per-token ownership (osprey-rule / relay-manager / default-queue) is the
+  single source of truth in `divine/nostr-kafka-bridge/main.py:CANONICAL_REASONS`; the
+  coupling tests in `test_main.py` parse the live `.sml` rules and fail if an
+  `osprey-rule` token has no rule, a rule references an uncatalogued token, or an alias
+  resolves off-vocabulary. coop-setup's route tokens are validated against this set on
+  the COOP side (a subset guard), so the three places cannot silently drift.
 - Each Rule name becomes a ClickHouse column; adding a rule needs `ADD COLUMN` in
   `divine/clickhouse-schema/001_osprey_events.sql` or the sink fails the whole batch.
 

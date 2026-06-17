@@ -10,6 +10,7 @@ Run: `python divine/nostr-kafka-bridge/test_main.py` or `pytest` against this fi
 """
 
 import importlib.util
+import re
 import sys
 import types
 from pathlib import Path
@@ -27,9 +28,33 @@ assert _spec and _spec.loader
 bridge = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bridge)
 
-# Canonical tokens COOP has a category-routing rule for. Everything else falls to
-# General Review by the default rule. Keep in sync with coop/divine/coop-setup-org.sh.
+# Tokens COOP gives a dedicated category queue. Everything else falls to General
+# Review by the default rule. This is the one cross-repo constant (it mirrors a COOP
+# fact, coop/divine/coop-setup-org.sh); test_routed_tokens_are_canonical guards it
+# against bridge.CANONICAL_REASONS so it cannot list a token the bridge never emits.
 ROUTED = {'csam', 'child_safety', 'underage_user', 'nudity', 'violence', 'harassment'}
+
+# Live SML rules that actually act on report reasons. Parsed (not hand-listed) so the
+# coupling tests break the moment a routed token loses its rule.
+_RULES_DIR = Path(__file__).resolve().parent.parent / 'rules' / 'rules' / 'reports'
+
+
+def _rule_reason_tokens():
+    """Every report_reason token an SML rule in divine/rules matches on.
+
+    Reads the live .sml files and pulls tokens from both `ReportReason == 'x'` and
+    `ReportReason in ['x', 'y']` forms, so the check reflects the rules as they are
+    rather than a second maintained list.
+    """
+    tokens = set()
+    eq = re.compile(r"ReportReason\s*==\s*'([^']+)'")
+    in_list = re.compile(r'ReportReason\s+in\s*\[([^\]]+)\]')
+    for path in sorted(_RULES_DIR.glob('*.sml')):
+        text = path.read_text()
+        tokens.update(eq.findall(text))
+        for group in in_list.findall(text):
+            tokens.update(re.findall(r"'([^']+)'", group))
+    return tokens
 
 
 def _reason(event):
@@ -145,6 +170,53 @@ def test_unmatched_reason_falls_through_to_general_review():
     # are not in the routed set.
     assert _reason(_mobile('spam', 'NS-spam')) == 'spam'
     assert 'spam' not in ROUTED
+
+
+def test_alias_targets_are_canonical():
+    # Every spelling alias must resolve to a token catalogued in CANONICAL_REASONS,
+    # so the canonical table is the complete vocabulary the bridge can emit.
+    unknown = {v for v in bridge._REASON_ALIASES.values() if v not in bridge.CANONICAL_REASONS}
+    assert not unknown, f'aliases resolve to non-canonical tokens: {unknown}'
+
+
+def test_routed_tokens_are_canonical():
+    # The COOP-routed set cannot name a token the bridge never emits.
+    unknown = ROUTED - set(bridge.CANONICAL_REASONS)
+    assert not unknown, f'ROUTED contains non-canonical tokens: {unknown}'
+
+
+def test_routed_tokens_have_a_consuming_rule_or_external_owner():
+    # The coupling guard. Every routed token must either be matched by a live SML rule
+    # or be explicitly owned outside Osprey (e.g. underage_user -> relay-manager age
+    # review). A routed token with neither would normalize cleanly, pass the routing
+    # tests, then fall into General Review with no error -- the exact gap this guards.
+    rule_tokens = _rule_reason_tokens()
+    for token in sorted(ROUTED):
+        owner = bridge.CANONICAL_REASONS.get(token)
+        if owner == 'osprey-rule':
+            assert token in rule_tokens, (
+                f"routed token '{token}' is owned by Osprey but no rule in {_RULES_DIR} "
+                f"matches ReportReason == '{token}'"
+            )
+        else:
+            # Routed outside Osprey: must be explicitly catalogued as such, not silent.
+            assert owner in ('relay-manager', 'default-queue'), (
+                f"routed token '{token}' has no consuming rule and no external owner in CANONICAL_REASONS"
+            )
+
+
+def test_osprey_rule_tokens_actually_have_a_rule():
+    # Inverse drift: if the table claims Osprey acts on a token, a rule must exist.
+    rule_tokens = _rule_reason_tokens()
+    claimed = {t for t, owner in bridge.CANONICAL_REASONS.items() if owner == 'osprey-rule'}
+    missing = claimed - rule_tokens
+    assert not missing, f'CANONICAL_REASONS marks these osprey-rule but no rule matches: {missing}'
+
+
+def test_rules_only_reference_canonical_tokens():
+    # A rule must not match a token the bridge can never emit / does not catalogue.
+    unknown = _rule_reason_tokens() - set(bridge.CANONICAL_REASONS)
+    assert not unknown, f'.sml rules reference non-canonical report reasons: {unknown}'
 
 
 if __name__ == '__main__':
