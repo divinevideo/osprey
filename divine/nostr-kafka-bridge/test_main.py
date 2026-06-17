@@ -50,7 +50,9 @@ def _rule_reason_tokens():
     eq = re.compile(r"ReportReason\s*==\s*'([^']+)'")
     in_list = re.compile(r'ReportReason\s+in\s*\[([^\]]+)\]')
     for path in sorted(_RULES_DIR.glob('*.sml')):
-        text = path.read_text()
+        # Strip line comments first so a ReportReason literal inside a '#' comment
+        # (e.g. an example in a docstring) cannot inject a phantom token.
+        text = '\n'.join(line.split('#', 1)[0] for line in path.read_text().splitlines())
         tokens.update(eq.findall(text))
         for group in in_list.findall(text):
             tokens.update(re.findall(r"'([^']+)'", group))

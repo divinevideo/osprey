@@ -13,7 +13,7 @@
 # and violence already surface on any user's first report; these match that, since the
 # only action is flag_for_review (a human still decides). The trusted-reporter gate is
 # reserved for AUTOMATIC actions (the CSAM/NSFW auto-hide in auto_hide.sml). An evolved
-# trust model is roadmapped (support-trust-safety/docs/moderation/coop-osprey-future-lifts-roadmap.md).
+# trust model is roadmapped in the coop-osprey moderation docs (support-trust-safety/docs/moderation/).
 #
 # The <reason>_reported label dedups: the first report flags + labels the event, so a
 # second report of the same category on the same event does not re-flag. human_reviewed
