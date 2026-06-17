@@ -27,11 +27,10 @@ cd divine && docker compose up -d --build
 
 ## Configuration gotchas & doc discipline
 
-Before changing report routing, rules, queues, or the bridge, read the coop-osprey
-moderation docs in `~/code/support-trust-safety/docs/moderation/` and **re-verify the
-live ecosystem state** (it drifts). When you learn something or change configuration,
-UPDATE those docs in the same change.
-Key couplings captured there:
+Before changing report routing, rules, queues, or the bridge, re-verify the live
+ecosystem state (it drifts); the coupling gotchas are written up in
+`support-trust-safety/docs/moderation/coop-osprey-configuration-gotchas.md`, which is
+worth keeping current as config changes. Key couplings:
 - The report_reason chain must align across THREE places (bridge `_REASON_ALIASES`
   → an osprey rule that emits an actionable verdict → coop-setup routing). A queue with
   no rule stays empty — COOPSink only posts actionable verdicts. The canonical token
