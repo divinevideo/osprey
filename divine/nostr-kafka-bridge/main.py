@@ -28,18 +28,71 @@ _action_counter = 0
 # Divine clients use different reason vocabularies. Normalize to canonical
 # values that SML rules can match consistently.
 #
-# Canonical values: csam, nudity, violence, ai_generated, spam, impersonation,
-# illegal, harassment, other
+# Canonical values and their downstream owners are defined in CANONICAL_REASONS below.
 # Mobile maps csam -> 'illegal' and sexual content -> 'nudity' per NIP-56.
-# Web passes raw reasons (csam, harassment, sexual-content, etc.).
+# Web passes raw reasons (csam, harassment, sexual-content, etc.). divine-web#364
+# splits child safety into three distinct categories, after which divine-web will send
+# the hyphenated tokens 'child-safety', 'csam', and 'underage-user' (alongside the
+# existing 'sexual-content', 'ai-generated', 'false-info'); they are aliased ahead of
+# that merge so routing is correct the moment web ships it. The hyphenated web forms
+# are aliased to canonical below; divine-mobile's camelCase 'childSafety' /
+# 'underageUser' collapse to 'childsafety' / 'underageuser'.
+# NB: divine-web sends hyphenated lowercase reasons (e.g. 'sexual-content',
+# 'ai-generated'); divine-mobile sends camelCase reason.name (e.g. 'sexualContent',
+# 'aiGenerated', 'childSafety') inside an 'NS-' NIP-32 label. Both arrive here
+# lowercased after _normalize_report_reason's strip().lower(), so mobile's
+# camelCase collapses to a single token ('sexualcontent', 'childsafety', ...).
+# We must alias BOTH spellings or the report falls through to General Review and
+# misses the SML auto-hide/threshold rules.
+#
+# CANONICAL_REASONS is the SINGLE SOURCE OF TRUTH for the tokens this bridge emits
+# and who owns each one downstream. Every _REASON_ALIASES value must be a key here,
+# and nothing should emit a token that is not catalogued here. Ownership drives where
+# a report is acted on:
+#   'osprey-rule'   -- a divine/rules/rules/reports/*.sml rule matches
+#                      ReportReason == <token> and emits an actionable verdict
+#                      (auto-hide / flag-for-review / threshold).
+#   'relay-manager' -- handled by the relay-manager ReportWatcher + Zendesk path,
+#                      NOT Osprey (e.g. age review's 15-day clock). Osprey has no
+#                      rule for it by design.
+#   'default-queue' -- no dedicated handling; falls to COOP General Review for a
+#                      human to triage.
+# The coupling tests in test_main.py parse the live .sml rules and fail if an
+# 'osprey-rule' token has no matching rule, if a rule references a token not
+# catalogued here, or if an alias resolves to a non-canonical token -- so this
+# table cannot silently drift from the rules.
+CANONICAL_REASONS = {
+    'csam': 'osprey-rule',  # auto_hide (immediate); NCMEC-bound
+    'illegal': 'osprey-rule',  # mobile's CSAM/violence/copyright overload; auto_hide matches it
+    'child_safety': 'osprey-rule',  # FirstChildSafetyReport -> human review queue
+    'harassment': 'osprey-rule',  # FirstHarassmentReport -> human review queue
+    'nudity': 'osprey-rule',  # first/threshold sexual-content rules
+    'violence': 'osprey-rule',  # first/threshold violence rules
+    'ai_generated': 'osprey-rule',  # moderation_service rule
+    'underage_user': 'relay-manager',  # age review: ReportWatcher 15-day clock + Zendesk, not Osprey
+    'spam': 'default-queue',
+    'impersonation': 'default-queue',
+    'other': 'default-queue',
+}
+
 _REASON_ALIASES = {
-    # CSAM variants -- mobile sends 'illegal' for CSAM but also for violence/copyright.
-    # We can't distinguish from 'illegal' alone, so we keep it as-is.
-    # The 'sexual_minors' and 'csam' forms are unambiguous.
+    # CSAM -- 'illegal' is mobile's overload for CSAM/violence/copyright, so we
+    # keep it as-is for human triage. 'sexual_minors' and 'csam' are unambiguous.
     'sexual_minors': 'csam',
     'ns-csam': 'csam',
-    # Nudity/sexual content
+    # Child safety -- distinct from CSAM and from age-review. Routes to its own
+    # "Child Safety" queue for human triage; a moderator escalates to csam if warranted.
+    'child-safety': 'child_safety',  # divine-web#364 (hyphenated web token)
+    'childsafety': 'child_safety',  # divine-mobile camelCase collapsed
+    'ns-childsafety': 'child_safety',
+    # Underage user (age review) -- feeds the relay-manager age-review case system
+    # (15-day clock, age tiers, suspension). Routes to its own "Age Review" queue.
+    'underage-user': 'underage_user',  # divine-web#364 (hyphenated web token)
+    'underageuser': 'underage_user',  # divine-mobile camelCase collapsed
+    'ns-underageuser': 'underage_user',
+    # Nudity/sexual content (incl. divine-mobile 'sexualContent' -> 'sexualcontent')
     'sexual-content': 'nudity',
+    'sexualcontent': 'nudity',
     'sexual': 'nudity',
     'explicit': 'nudity',
     'pornography': 'nudity',
@@ -52,8 +105,13 @@ _REASON_ALIASES = {
     'ns-spam': 'spam',
     # Violence
     'ns-violence': 'violence',
-    # Other
+    # AI-generated (divine-web 'ai-generated', divine-mobile 'aiGenerated')
+    'ai-generated': 'ai_generated',
+    'aigenerated': 'ai_generated',
+    # Other (divine-web 'false-info', divine-mobile 'falseInformation')
     'false-information': 'other',
+    'false-info': 'other',
+    'falseinformation': 'other',
     'ns-other': 'other',
     # MOD namespace labels from moderation-service kind 1984 reports.
     # These are the raw l-tag values: NS (Not Safe), VI (Violence), AI (AI-generated).
@@ -238,7 +296,16 @@ def _wrap_nostr_event(event: dict) -> dict:
         # for trusted reporters via the CSAM rule.
         if not raw_reason:
             content_lower = event.get('content', '').strip().lower()
-            for reason in ('csam', 'sexual_minors', 'nudity', 'violence', 'harassment', 'spam', 'impersonation'):
+            for reason in (
+                'csam',
+                'sexual_minors',
+                'child_safety',
+                'nudity',
+                'violence',
+                'harassment',
+                'spam',
+                'impersonation',
+            ):
                 if content_lower == reason:
                     raw_reason = reason
                     break
