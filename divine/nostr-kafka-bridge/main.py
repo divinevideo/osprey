@@ -21,6 +21,31 @@ KAFKA_BOOTSTRAP_SERVERS = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092'
 KAFKA_TOPIC = os.environ.get('KAFKA_TOPIC', 'osprey.actions_input')
 HEALTH_PORT = int(os.environ.get('HEALTH_PORT', '8080'))
 
+# Bounded, kind-scoped subscription. An unbounded REQ ({}) makes the relay sort
+# its entire stored history on every (re)connect, which trips ClickHouse's
+# per-user memory cap on staging (Code: 241 MEMORY_LIMIT_EXCEEDED on
+# relay_event_list), returns zero, and drops the sub on the WS keepalive timeout
+# -- silently starving Osprey ingestion. An all-kinds query stays too big even
+# with since+limit (still zero); scoping to the kinds the rules act on keeps each
+# query cheap. Live events still stream after EOSE. All env-tunable without a
+# rebuild. Context: iac#1230 (staging relay ClickHouse sizing).
+SUBSCRIBE_LOOKBACK_SECONDS = int(os.environ.get('SUBSCRIBE_LOOKBACK_SECONDS', '3600'))
+SUBSCRIBE_LIMIT = int(os.environ.get('SUBSCRIBE_LIMIT', '500'))
+
+
+def _parse_kinds(env_val: str, default: list) -> list:
+    """Parse a comma-separated kinds env override, else the default list."""
+    if not env_val.strip():
+        return default
+    return [int(k) for k in env_val.split(',') if k.strip()]
+
+
+# Kinds Osprey acts on. Moderation kinds (1984 reports, 1985 labels -- the COOP
+# path) get their own filter so a burst of high-volume content can't crowd them
+# out of the capped replay. Content kinds feed the behavioral/video models.
+MODERATION_KINDS = _parse_kinds(os.environ.get('SUBSCRIBE_MODERATION_KINDS', ''), [1984, 1985])
+CONTENT_KINDS = _parse_kinds(os.environ.get('SUBSCRIBE_CONTENT_KINDS', ''), [0, 1, 1111, 34235, 34236])
+
 connected = False
 _action_counter = 0
 
@@ -330,6 +355,25 @@ def _wrap_nostr_event(event: dict) -> dict:
     }
 
 
+def build_subscription_filters(now_ts: int) -> list:
+    """Build bounded, kind-scoped REQ filters (recent window + capped replay).
+
+    Never an unbounded {} filter and never all-kinds: both make the staging
+    relay sort a set too large for ClickHouse's per-user memory limit, which
+    returns zero events (see iac#1230). Moderation and content kinds are separate
+    filters so the capped replay can't starve reports/labels. Live events still
+    stream after EOSE, so ongoing ingestion is unaffected by the bound. Set
+    SUBSCRIBE_LOOKBACK_SECONDS=0 to fall back to a limit-only bound.
+    """
+    base: dict = {'limit': SUBSCRIBE_LIMIT}
+    if SUBSCRIBE_LOOKBACK_SECONDS > 0:
+        base['since'] = now_ts - SUBSCRIBE_LOOKBACK_SECONDS
+    return [
+        {**base, 'kinds': MODERATION_KINDS},
+        {**base, 'kinds': CONTENT_KINDS},
+    ]
+
+
 # --- Main loop ---
 async def bridge():
     global connected
@@ -343,11 +387,16 @@ async def bridge():
             log.info('Connecting to %s (sub %s)', RELAY_URL, sub_id)
 
             async with websockets.connect(RELAY_URL) as ws:
-                # Subscribe to all events
-                await ws.send(json.dumps(['REQ', sub_id, {}]))
+                # Bounded, kind-scoped subscription (recent window + capped
+                # replay); live events stream after EOSE. An unbounded {} or
+                # all-kinds filter OOMs the relay's ClickHouse and starves
+                # ingestion (returns zero) -- see iac#1230.
+                now_ts = int(datetime.now(timezone.utc).timestamp())
+                filters = build_subscription_filters(now_ts)
+                await ws.send(json.dumps(['REQ', sub_id, *filters]))
                 connected = True
                 backoff = 1
-                log.info('Connected and subscribed')
+                log.info('Connected and subscribed (filters=%s)', filters)
 
                 async for raw in ws:
                     try:

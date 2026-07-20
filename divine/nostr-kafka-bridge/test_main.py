@@ -221,6 +221,41 @@ def test_rules_only_reference_canonical_tokens():
     assert not unknown, f'.sml rules reference non-canonical report reasons: {unknown}'
 
 
+def test_subscription_filters_bounded_and_kind_scoped():
+    # The bridge must never REQ with an unbounded {} filter, and never all-kinds:
+    # both make the staging relay sort a set too large for ClickHouse's per-user
+    # memory cap (Code: 241 MEMORY_LIMIT_EXCEEDED on relay_event_list), which
+    # returns zero, drops the sub on the WS keepalive, and starves Osprey
+    # ingestion. Each filter is kind-scoped + time/limit bounded; live events
+    # still stream after EOSE.
+    fs = bridge.build_subscription_filters(1_000_000)
+    assert fs, 'must send at least one filter'
+    for f in fs:
+        assert f != {}, 'unbounded {} filter OOMs the relay and starves ingestion'
+        assert f.get('kinds'), 'every filter must be kind-scoped (all-kinds also OOMs)'
+        assert f['limit'] == bridge.SUBSCRIBE_LIMIT
+        assert f['since'] == 1_000_000 - bridge.SUBSCRIBE_LOOKBACK_SECONDS
+    all_kinds = {k for f in fs for k in f['kinds']}
+    # The COOP path depends on reports (1984) and labels (1985) being fed.
+    assert 1984 in all_kinds and 1985 in all_kinds
+
+
+def test_subscription_since_disabled_when_lookback_zero():
+    # SUBSCRIBE_LOOKBACK_SECONDS=0 falls back to a limit-only bound; filters must
+    # still be kind-scoped and never the unbounded {}.
+    orig = bridge.SUBSCRIBE_LOOKBACK_SECONDS
+    try:
+        bridge.SUBSCRIBE_LOOKBACK_SECONDS = 0
+        fs = bridge.build_subscription_filters(1_000_000)
+        assert fs
+        for f in fs:
+            assert 'since' not in f
+            assert f['limit'] == bridge.SUBSCRIBE_LIMIT
+            assert f.get('kinds')
+    finally:
+        bridge.SUBSCRIBE_LOOKBACK_SECONDS = orig
+
+
 if __name__ == '__main__':
     fns = [v for k, v in sorted(globals().items()) if k.startswith('test_') and callable(v)]
     for fn in fns:
