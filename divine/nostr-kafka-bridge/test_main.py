@@ -9,7 +9,9 @@ deps (the bridge ships its own requirements.txt separate from the osprey worker)
 Run: `python divine/nostr-kafka-bridge/test_main.py` or `pytest` against this file.
 """
 
+import asyncio
 import importlib.util
+import json
 import re
 import sys
 import types
@@ -300,6 +302,113 @@ def test_parse_kinds_rejects_set_but_empty_override():
     assert bridge._parse_kinds('', [1984, 1985]) == [1984, 1985]
     assert bridge._parse_kinds('   ', [1984, 1985]) == [1984, 1985]
     assert bridge._parse_kinds('1984, 1985, 34235', []) == [1984, 1985, 34235]
+
+
+def test_progress_ts_rejects_future_and_non_int():
+    now = 1000
+    assert bridge._progress_ts(900, now) == 900  # past: ok
+    assert bridge._progress_ts(now, now) == now  # exactly now: ok
+    assert bridge._progress_ts(now + 10, now) == now + 10  # within skew: ok
+    assert bridge._progress_ts(now + bridge.MAX_CLOCK_SKEW_SECONDS + 1, now) is None  # too far future
+    assert bridge._progress_ts('123', now) is None  # non-int
+    assert bridge._progress_ts(None, now) is None
+    assert bridge._progress_ts(True, now) is None  # bool is not a valid timestamp
+
+
+# --- consume_subscription fakes ---
+
+
+class _FakeFuture:
+    def __init__(self, exc=None):
+        self._exc = exc
+
+    def get(self, timeout=None):
+        if self._exc:
+            raise self._exc
+        return True
+
+
+class _FakeProducer:
+    """Records sends; optionally fails the Nth send's delivery."""
+
+    def __init__(self, fail_on_index=None):
+        self.sent = []
+        self._fail_on = fail_on_index
+
+    def send(self, topic, value=None):
+        idx = len(self.sent)
+        self.sent.append(value)
+        if self._fail_on is not None and idx == self._fail_on:
+            return _FakeFuture(exc=RuntimeError('broker rejected'))
+        return _FakeFuture()
+
+
+class _FakeWS:
+    """Async-iterable of raw relay frames (JSON strings)."""
+
+    def __init__(self, frames):
+        self._frames = list(frames)
+
+    def __aiter__(self):
+        self._it = iter(self._frames)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+def _event_frame(created_at, kind=1984, eid='deadbeef'):
+    return json.dumps(['EVENT', 'sub', {
+        'kind': kind, 'id': eid, 'pubkey': 'p', 'created_at': created_at,
+        'tags': [], 'content': '',
+    }])
+
+
+def _eose_frame():
+    return json.dumps(['EOSE', 'sub'])
+
+
+def _consume(frames, producer, cursor, now=5000):
+    return asyncio.run(bridge.consume_subscription(_FakeWS(frames), producer, cursor, now=lambda: now))
+
+
+def test_consume_commits_cursor_at_eose():
+    # Replayed events advance a tentative mark that is committed once EOSE proves
+    # the stored window was fully delivered.
+    cursor = _consume([_event_frame(1000), _event_frame(1010), _eose_frame()], _FakeProducer(), None)
+    assert cursor == 1010
+
+
+def test_consume_does_not_commit_before_eose():
+    # A drop before EOSE means the replay was incomplete; the cursor must stay at
+    # the prior safe point so the next connection re-fetches the whole window.
+    cursor = _consume([_event_frame(1000), _event_frame(1010)], _FakeProducer(), 500)
+    assert cursor == 500
+
+
+def test_consume_commits_each_live_event_after_eose():
+    cursor = _consume([_eose_frame(), _event_frame(2000), _event_frame(2001)], _FakeProducer(), 500)
+    assert cursor == 2001
+
+
+def test_consume_does_not_advance_past_undelivered_event():
+    # A delivery failure must propagate (caller keeps the old cursor and the
+    # event is re-fetched), never silently advance the cursor past it.
+    try:
+        _consume([_eose_frame(), _event_frame(2000), _event_frame(2001)], _FakeProducer(fail_on_index=1), 500)
+        raise AssertionError('expected delivery failure to propagate')
+    except RuntimeError:
+        pass
+
+
+def test_consume_rejects_future_created_at_for_cursor():
+    # A future-dated event is still published but must not advance the cursor
+    # (else the next reconnect skips outage-gap events).
+    cursor = _consume([_eose_frame(), _event_frame(9_999_999), _event_frame(3000)], _FakeProducer(), 500, now=4000)
+    assert cursor == 3000
 
 
 if __name__ == '__main__':

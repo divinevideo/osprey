@@ -32,6 +32,14 @@ HEALTH_PORT = int(os.environ.get('HEALTH_PORT', '8080'))
 SUBSCRIBE_LOOKBACK_SECONDS = int(os.environ.get('SUBSCRIBE_LOOKBACK_SECONDS', '3600'))
 SUBSCRIBE_LIMIT = int(os.environ.get('SUBSCRIBE_LIMIT', '500'))
 
+# Wait this long for Kafka to ack a record before advancing the resume cursor,
+# so a broker reject never leaves the cursor ahead of what Kafka durably has.
+KAFKA_DELIVERY_TIMEOUT = float(os.environ.get('KAFKA_DELIVERY_TIMEOUT_SECONDS', '10'))
+# A created_at more than this far in the future is rejected as cursor progress
+# (created_at is attacker-controlled; a future cursor would skip outage-gap
+# events on the next reconnect). Tolerates ordinary clock skew.
+MAX_CLOCK_SKEW_SECONDS = int(os.environ.get('MAX_CLOCK_SKEW_SECONDS', '300'))
+
 
 def _parse_kinds(env_val: str, default: list) -> list:
     """Parse a comma-separated kinds env override, else the default list.
@@ -60,6 +68,7 @@ CONTENT_KINDS = _parse_kinds(os.environ.get('SUBSCRIBE_CONTENT_KINDS', ''), [0, 
 
 connected = False
 _action_counter = 0
+_published_count = 0
 
 # --- Report reason normalization ---
 # Divine clients use different reason vocabularies. Normalize to canonical
@@ -377,12 +386,14 @@ def build_subscription_filters(now_ts: int, high_water: int | None = None) -> li
     stream after EOSE, so ongoing ingestion is unaffected by the bound. Set
     SUBSCRIBE_LOOKBACK_SECONDS=0 to fall back to a limit-only bound.
 
-    Reconnect cursor: `high_water` is the newest created_at already published to
-    Kafka. On reconnect we resume from it (so events aren't replayed with fresh
-    action IDs) but never earlier than the cold-start floor (now - lookback),
-    which bounds backfill after a long outage so the query stays servable. Since
-    is clamped to now: created_at is attacker-controlled, and a future-dated
-    event must not poison the cursor and stall ingestion.
+    Reconnect cursor: `high_water` is the newest created_at that has been
+    durably delivered to Kafka (see consume_subscription). On reconnect we
+    resume from it (so events aren't replayed with fresh action IDs) but never
+    earlier than the cold-start floor (now - lookback), which bounds backfill
+    after a long outage so the query stays servable. `since` is also clamped to
+    now here as belt-and-suspenders; the cursor is already validated at the
+    storage boundary (_progress_ts) so an attacker-controlled future created_at
+    cannot poison it.
     """
     floor = now_ts - SUBSCRIBE_LOOKBACK_SECONDS if SUBSCRIBE_LOOKBACK_SECONDS > 0 else None
     candidates = [t for t in (floor, high_water) if t is not None]
@@ -398,15 +409,103 @@ def build_subscription_filters(now_ts: int, high_water: int | None = None) -> li
     ]
 
 
+def _now() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
+
+
+def _progress_ts(created: object, now_ts: int) -> int | None:
+    """The created_at to store as reconnect-cursor progress, or None if it must
+    not advance the cursor.
+
+    Rejects non-ints and implausibly-future timestamps: created_at is
+    attacker-controlled, and a future cursor would skip outage-gap events on the
+    next reconnect until the clock catches up. Rejecting (rather than clamping)
+    keeps the cursor pinned to the last real event, so the gap stays covered.
+    """
+    if not isinstance(created, int) or isinstance(created, bool):
+        return None
+    if created > now_ts + MAX_CLOCK_SKEW_SECONDS:
+        return None
+    return created
+
+
+def _deliver(producer, value) -> None:
+    """Block until Kafka acks the record (raises on delivery failure)."""
+    producer.send(KAFKA_TOPIC, value=value).get(timeout=KAFKA_DELIVERY_TIMEOUT)
+
+
+async def consume_subscription(ws, producer, committed_cursor, now=_now):
+    """Consume one relay connection, publish events to Kafka, and advance the
+    resume cursor safely. Returns the updated committed cursor.
+
+    Cursor safety (the whole point of the cursor is to not drop moderation
+    events across reconnects, so advancing it too eagerly is a correctness bug):
+    - Advance only after Kafka delivery is acked (await the send). A broker
+      reject or WS drop then never leaves the cursor ahead of what Kafka has,
+      which would skip those events on the next reconnect.
+    - Hold progress tentative until EOSE. The stored replay can arrive unordered
+      and may be cut off mid-stream, so a mid-replay point is not a safe resume;
+      commit at EOSE, then commit per delivered live event.
+    - Reject future-dated created_at (_progress_ts) so it can't poison the
+      cursor.
+
+    On any failure this raises, leaving the caller's committed_cursor unchanged,
+    so the next connection re-fetches from the last safe point (at-least-once;
+    duplicate action IDs are fine -- the SML rules dedup reports via labels).
+    """
+    global _published_count
+    loop = asyncio.get_running_loop()
+    replay_hwm = committed_cursor
+    eosed = False
+
+    async for raw in ws:
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(msg, list) or not msg:
+            continue
+
+        if msg[0] == 'EOSE':
+            eosed = True
+            committed_cursor = replay_hwm
+            continue
+        if msg[0] != 'EVENT' or len(msg) < 3:
+            continue
+
+        event = msg[2]
+        wrapped = _wrap_nostr_event(event)
+        # Await durable delivery BEFORE advancing the cursor (see docstring).
+        await loop.run_in_executor(None, _deliver, producer, wrapped)
+
+        ts = _progress_ts(event.get('created_at'), now())
+        if ts is not None and (replay_hwm is None or ts > replay_hwm):
+            replay_hwm = ts
+        if eosed:
+            committed_cursor = replay_hwm
+
+        _published_count += 1
+        if _published_count % 100 == 1:
+            log.info(
+                'Published %d events (latest: kind %s id %s)',
+                _published_count,
+                event.get('kind', '?'),
+                str(event.get('id', '?'))[:12],
+            )
+        else:
+            log.debug('Published event %s', str(event.get('id', '?'))[:12])
+
+    return committed_cursor
+
+
 # --- Main loop ---
 async def bridge():
     global connected
     producer = make_producer()
     backoff = 1
-    event_count = 0
-    # Newest created_at published to Kafka, kept across reconnects so we resume
-    # from where we left off instead of replaying the whole window each time.
-    high_water: int | None = None
+    # Newest created_at durably delivered to Kafka, kept across reconnects so we
+    # resume from where we left off instead of replaying the whole window.
+    committed_cursor: int | None = None
 
     while True:
         try:
@@ -418,42 +517,16 @@ async def bridge():
                 # replay); live events stream after EOSE. An unbounded {} or
                 # all-kinds filter OOMs the relay's ClickHouse and starves
                 # ingestion (returns zero) -- see iac#1230. On reconnect we
-                # resume from high_water (the cursor) rather than re-fetching
-                # the whole window.
-                now_ts = int(datetime.now(timezone.utc).timestamp())
-                filters = build_subscription_filters(now_ts, high_water)
+                # resume from committed_cursor rather than re-fetching the
+                # whole window.
+                now_ts = _now()
+                filters = build_subscription_filters(now_ts, committed_cursor)
                 await ws.send(json.dumps(['REQ', sub_id, *filters]))
                 connected = True
                 backoff = 1
                 log.info('Connected and subscribed (filters=%s)', filters)
 
-                async for raw in ws:
-                    try:
-                        msg = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-
-                    if not isinstance(msg, list) or len(msg) < 3:
-                        continue
-
-                    if msg[0] == 'EVENT':
-                        event = msg[2]
-                        wrapped = _wrap_nostr_event(event)
-                        producer.send(KAFKA_TOPIC, value=wrapped)
-                        # Advance the reconnect cursor to the newest event seen.
-                        created = event.get('created_at')
-                        if isinstance(created, int) and (high_water is None or created > high_water):
-                            high_water = created
-                        event_count += 1
-                        if event_count % 100 == 1:
-                            log.info(
-                                'Published %d events (latest: kind %s id %s)',
-                                event_count,
-                                event.get('kind', '?'),
-                                event.get('id', '?')[:12],
-                            )
-                        else:
-                            log.debug('Published event %s', event.get('id', '?')[:12])
+                committed_cursor = await consume_subscription(ws, producer, committed_cursor)
 
         except Exception as exc:
             connected = False
