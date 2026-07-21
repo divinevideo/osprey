@@ -9,7 +9,9 @@ deps (the bridge ships its own requirements.txt separate from the osprey worker)
 Run: `python divine/nostr-kafka-bridge/test_main.py` or `pytest` against this file.
 """
 
+import asyncio
 import importlib.util
+import json
 import re
 import sys
 import types
@@ -219,6 +221,258 @@ def test_rules_only_reference_canonical_tokens():
     # A rule must not match a token the bridge can never emit / does not catalogue.
     unknown = _rule_reason_tokens() - set(bridge.CANONICAL_REASONS)
     assert not unknown, f'.sml rules reference non-canonical report reasons: {unknown}'
+
+
+def test_subscription_filters_bounded_and_kind_scoped():
+    # The bridge must never REQ with an unbounded {} filter, and never all-kinds:
+    # both make the staging relay sort a set too large for ClickHouse's per-user
+    # memory cap (Code: 241 MEMORY_LIMIT_EXCEEDED on relay_event_list), which
+    # returns zero, drops the sub on the WS keepalive, and starves Osprey
+    # ingestion. Each filter is kind-scoped + time/limit bounded; live events
+    # still stream after EOSE.
+    fs = bridge.build_subscription_filters(1_000_000)
+    assert fs, 'must send at least one filter'
+    for f in fs:
+        assert f != {}, 'unbounded {} filter OOMs the relay and starves ingestion'
+        assert f.get('kinds'), 'every filter must be kind-scoped (all-kinds also OOMs)'
+        assert f['limit'] == bridge.SUBSCRIBE_LIMIT
+        assert f['since'] == 1_000_000 - bridge.SUBSCRIBE_LOOKBACK_SECONDS
+    all_kinds = {k for f in fs for k in f['kinds']}
+    # The COOP path depends on reports (1984) and labels (1985) being fed.
+    assert 1984 in all_kinds and 1985 in all_kinds
+
+
+def test_subscription_since_disabled_when_lookback_zero():
+    # SUBSCRIBE_LOOKBACK_SECONDS=0 falls back to a limit-only bound; filters must
+    # still be kind-scoped and never the unbounded {}.
+    orig = bridge.SUBSCRIBE_LOOKBACK_SECONDS
+    try:
+        bridge.SUBSCRIBE_LOOKBACK_SECONDS = 0
+        fs = bridge.build_subscription_filters(1_000_000)
+        assert fs
+        for f in fs:
+            assert 'since' not in f
+            assert f['limit'] == bridge.SUBSCRIBE_LIMIT
+            assert f.get('kinds')
+    finally:
+        bridge.SUBSCRIBE_LOOKBACK_SECONDS = orig
+
+
+def test_cursor_resumes_from_high_water_on_reconnect():
+    # On reconnect, resume from the newest created_at already published, not
+    # now-lookback, so events still in the window aren't replayed with fresh
+    # action IDs.
+    now = 1_000_000
+    hw = now - 60  # saw an event 60s ago; lookback default is 3600
+    for f in bridge.build_subscription_filters(now, high_water=hw):
+        assert f['since'] == hw
+
+
+def test_cursor_floors_at_cold_start_after_long_outage():
+    # After an outage longer than the lookback, don't try to backfill the whole
+    # gap (that reintroduces the unbounded scan that OOMs the relay); floor the
+    # resume point at now - lookback.
+    now = 1_000_000
+    floor = now - bridge.SUBSCRIBE_LOOKBACK_SECONDS
+    hw = floor - 10_000  # last published event well before the floor
+    for f in bridge.build_subscription_filters(now, high_water=hw):
+        assert f['since'] == floor
+
+
+def test_cursor_clamped_to_now_not_future():
+    # created_at is attacker-controlled; a future-dated event must not poison the
+    # cursor and stall ingestion (since past now would match nothing until real
+    # time catches up).
+    now = 1_000_000
+    for f in bridge.build_subscription_filters(now, high_water=now + 999_999):
+        assert f['since'] == now
+
+
+def test_parse_kinds_rejects_set_but_empty_override():
+    # A set-but-malformed override (',' / whitespace / garbage) must not silently
+    # yield [] -- kinds: [] matches nothing and stops ingestion. Unset is fine
+    # (falls back to default); set-but-empty is a hard config error.
+    for bad in (',', ' , ', ',,,'):
+        try:
+            bridge._parse_kinds(bad, [1984, 1985])
+            raise AssertionError(f'expected ValueError for override {bad!r}')
+        except ValueError:
+            pass
+    # unset -> default; valid -> parsed
+    assert bridge._parse_kinds('', [1984, 1985]) == [1984, 1985]
+    assert bridge._parse_kinds('   ', [1984, 1985]) == [1984, 1985]
+    assert bridge._parse_kinds('1984, 1985, 34235', []) == [1984, 1985, 34235]
+
+
+def test_progress_ts_rejects_future_and_non_int():
+    now = 1000
+    assert bridge._progress_ts(900, now) == 900  # past: ok
+    assert bridge._progress_ts(now, now) == now  # exactly now: ok
+    assert bridge._progress_ts(now + 10, now) == now + 10  # within skew: ok
+    assert bridge._progress_ts(now + bridge.MAX_CLOCK_SKEW_SECONDS + 1, now) is None  # too far future
+    assert bridge._progress_ts('123', now) is None  # non-int
+    assert bridge._progress_ts(None, now) is None
+    assert bridge._progress_ts(True, now) is None  # bool is not a valid timestamp
+
+
+# --- consume_subscription fakes ---
+
+
+class _FakeFuture:
+    def __init__(self, exc=None):
+        self._exc = exc
+
+    def get(self, timeout=None):
+        if self._exc:
+            raise self._exc
+        return True
+
+
+class _FakeProducer:
+    """Records sends; optionally fails the Nth send's delivery."""
+
+    def __init__(self, fail_on_index=None):
+        self.sent = []
+        self._fail_on = fail_on_index
+
+    def send(self, topic, value=None):
+        idx = len(self.sent)
+        self.sent.append(value)
+        if self._fail_on is not None and idx == self._fail_on:
+            return _FakeFuture(exc=RuntimeError('broker rejected'))
+        return _FakeFuture()
+
+
+class _FakeWS:
+    """Async-iterable of raw relay frames (JSON strings)."""
+
+    def __init__(self, frames):
+        self._frames = list(frames)
+
+    def __aiter__(self):
+        self._it = iter(self._frames)
+        return self
+
+    async def __anext__(self):
+        try:
+            frame = next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration
+        if isinstance(frame, BaseException):
+            raise frame  # simulate a mid-stream WS drop
+        return frame
+
+
+def _event_frame(created_at, kind=1984, eid='deadbeef'):
+    return json.dumps(
+        [
+            'EVENT',
+            'sub',
+            {
+                'kind': kind,
+                'id': eid,
+                'pubkey': 'p',
+                'created_at': created_at,
+                'tags': [],
+                'content': '',
+            },
+        ]
+    )
+
+
+def _eose_frame():
+    return json.dumps(['EOSE', 'sub'])
+
+
+def _consume(frames, producer, cursor_value, now=5000):
+    """Run consume_subscription over `frames` and return the resulting cursor
+    value. `now` may be an int or a callable. Propagates exceptions (so
+    delivery/WS-drop tests can assert on them); use a _Cursor directly to inspect
+    committed progress after an exception."""
+    c = bridge._Cursor(cursor_value)
+    now_fn = now if callable(now) else (lambda: now)
+    asyncio.run(bridge.consume_subscription(_FakeWS(frames), producer, c, now=now_fn))
+    return c.value
+
+
+def test_consume_commits_cursor_at_eose():
+    # Replayed events advance a tentative mark that is committed once EOSE proves
+    # the stored window was fully delivered.
+    cursor = _consume([_event_frame(1000), _event_frame(1010), _eose_frame()], _FakeProducer(), None)
+    assert cursor == 1010
+
+
+def test_consume_does_not_commit_before_eose():
+    # A drop before EOSE means the replay was incomplete; the cursor must stay at
+    # the prior safe point so the next connection re-fetches the whole window.
+    cursor = _consume([_event_frame(1000), _event_frame(1010)], _FakeProducer(), 500)
+    assert cursor == 500
+
+
+def test_consume_commits_each_live_event_after_eose():
+    cursor = _consume([_eose_frame(), _event_frame(2000), _event_frame(2001)], _FakeProducer(), 500)
+    assert cursor == 2001
+
+
+def test_consume_does_not_advance_past_undelivered_event():
+    # A delivery failure must propagate (caller keeps the old cursor and the
+    # event is re-fetched), never silently advance the cursor past it.
+    try:
+        _consume([_eose_frame(), _event_frame(2000), _event_frame(2001)], _FakeProducer(fail_on_index=1), 500)
+        raise AssertionError('expected delivery failure to propagate')
+    except RuntimeError:
+        pass
+
+
+def test_consume_rejects_future_created_at_for_cursor():
+    # A future-dated event is still published but must not advance the cursor
+    # (else the next reconnect skips outage-gap events).
+    cursor = _consume([_eose_frame(), _event_frame(9_999_999), _event_frame(3000)], _FakeProducer(), 500, now=4000)
+    assert cursor == 3000
+
+
+def test_consume_validates_created_at_at_receipt_not_after_delivery():
+    # created_at is future at RECEIPT but the wall clock crosses the skew
+    # boundary while the (slow) delivery is in flight. Validation must use the
+    # receipt-time clock, so the event is rejected and the cursor is not advanced.
+    skew = bridge.MAX_CLOCK_SKEW_SECONDS
+    clock = {'t': 1000}
+    created = 1000 + skew + 50  # future vs receipt (1000), valid vs the later reading
+
+    class _SlowProducer(_FakeProducer):
+        def send(self, topic, value=None):
+            fut = super().send(topic, value)
+            clock['t'] = 1000 + skew + 100  # time passes during delivery
+            return fut
+
+    cursor = _consume([_eose_frame(), _event_frame(created)], _SlowProducer(), 500, now=lambda: clock['t'])
+    assert cursor == 500  # validated at receipt -> rejected -> cursor unchanged
+
+
+def test_consume_preserves_committed_progress_on_delivery_failure():
+    # A live event is acked+committed, then a later delivery fails and the
+    # coroutine raises. The committed progress must survive (else the report is
+    # re-published on reconnect and trips the second-report auto-hide).
+    c = bridge._Cursor(500)
+    frames = [_eose_frame(), _event_frame(2000), _event_frame(2001)]
+    try:
+        asyncio.run(bridge.consume_subscription(_FakeWS(frames), _FakeProducer(fail_on_index=1), c, now=lambda: 9000))
+        raise AssertionError('expected delivery failure to propagate')
+    except RuntimeError:
+        pass
+    assert c.value == 2000  # 2000 acked+committed before 2001 failed
+
+
+def test_consume_preserves_committed_progress_on_ws_drop():
+    # Same invariant when the WS itself drops mid-stream after a live ack.
+    c = bridge._Cursor(500)
+    frames = [_eose_frame(), _event_frame(2000), ConnectionError('ws drop')]
+    try:
+        asyncio.run(bridge.consume_subscription(_FakeWS(frames), _FakeProducer(), c, now=lambda: 9000))
+        raise AssertionError('expected WS drop to propagate')
+    except ConnectionError:
+        pass
+    assert c.value == 2000
 
 
 if __name__ == '__main__':
