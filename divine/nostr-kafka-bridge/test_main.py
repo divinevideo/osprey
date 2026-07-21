@@ -256,6 +256,52 @@ def test_subscription_since_disabled_when_lookback_zero():
         bridge.SUBSCRIBE_LOOKBACK_SECONDS = orig
 
 
+def test_cursor_resumes_from_high_water_on_reconnect():
+    # On reconnect, resume from the newest created_at already published, not
+    # now-lookback, so events still in the window aren't replayed with fresh
+    # action IDs.
+    now = 1_000_000
+    hw = now - 60  # saw an event 60s ago; lookback default is 3600
+    for f in bridge.build_subscription_filters(now, high_water=hw):
+        assert f['since'] == hw
+
+
+def test_cursor_floors_at_cold_start_after_long_outage():
+    # After an outage longer than the lookback, don't try to backfill the whole
+    # gap (that reintroduces the unbounded scan that OOMs the relay); floor the
+    # resume point at now - lookback.
+    now = 1_000_000
+    floor = now - bridge.SUBSCRIBE_LOOKBACK_SECONDS
+    hw = floor - 10_000  # last published event well before the floor
+    for f in bridge.build_subscription_filters(now, high_water=hw):
+        assert f['since'] == floor
+
+
+def test_cursor_clamped_to_now_not_future():
+    # created_at is attacker-controlled; a future-dated event must not poison the
+    # cursor and stall ingestion (since past now would match nothing until real
+    # time catches up).
+    now = 1_000_000
+    for f in bridge.build_subscription_filters(now, high_water=now + 999_999):
+        assert f['since'] == now
+
+
+def test_parse_kinds_rejects_set_but_empty_override():
+    # A set-but-malformed override (',' / whitespace / garbage) must not silently
+    # yield [] -- kinds: [] matches nothing and stops ingestion. Unset is fine
+    # (falls back to default); set-but-empty is a hard config error.
+    for bad in (',', ' , ', ',,,'):
+        try:
+            bridge._parse_kinds(bad, [1984, 1985])
+            raise AssertionError(f'expected ValueError for override {bad!r}')
+        except ValueError:
+            pass
+    # unset -> default; valid -> parsed
+    assert bridge._parse_kinds('', [1984, 1985]) == [1984, 1985]
+    assert bridge._parse_kinds('   ', [1984, 1985]) == [1984, 1985]
+    assert bridge._parse_kinds('1984, 1985, 34235', []) == [1984, 1985, 34235]
+
+
 if __name__ == '__main__':
     fns = [v for k, v in sorted(globals().items()) if k.startswith('test_') and callable(v)]
     for fn in fns:

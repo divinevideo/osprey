@@ -34,10 +34,22 @@ SUBSCRIBE_LIMIT = int(os.environ.get('SUBSCRIBE_LIMIT', '500'))
 
 
 def _parse_kinds(env_val: str, default: list) -> list:
-    """Parse a comma-separated kinds env override, else the default list."""
+    """Parse a comma-separated kinds env override, else the default list.
+
+    Unset (empty/whitespace) falls back to the default. A set-but-malformed
+    override (e.g. ',' or garbage) must NOT silently parse to [] -- an empty
+    kinds filter matches no events and would stop ingestion, so it's a hard
+    configuration error.
+    """
     if not env_val.strip():
         return default
-    return [int(k) for k in env_val.split(',') if k.strip()]
+    kinds = [int(k) for k in env_val.split(',') if k.strip()]
+    if not kinds:
+        raise ValueError(
+            f'kinds override {env_val!r} parsed to no kinds; refusing to '
+            'subscribe to an empty kind set (matches nothing / stops ingestion)'
+        )
+    return kinds
 
 
 # Kinds Osprey acts on. Moderation kinds (1984 reports, 1985 labels -- the COOP
@@ -355,7 +367,7 @@ def _wrap_nostr_event(event: dict) -> dict:
     }
 
 
-def build_subscription_filters(now_ts: int) -> list:
+def build_subscription_filters(now_ts: int, high_water: int | None = None) -> list:
     """Build bounded, kind-scoped REQ filters (recent window + capped replay).
 
     Never an unbounded {} filter and never all-kinds: both make the staging
@@ -364,10 +376,22 @@ def build_subscription_filters(now_ts: int) -> list:
     filters so the capped replay can't starve reports/labels. Live events still
     stream after EOSE, so ongoing ingestion is unaffected by the bound. Set
     SUBSCRIBE_LOOKBACK_SECONDS=0 to fall back to a limit-only bound.
+
+    Reconnect cursor: `high_water` is the newest created_at already published to
+    Kafka. On reconnect we resume from it (so events aren't replayed with fresh
+    action IDs) but never earlier than the cold-start floor (now - lookback),
+    which bounds backfill after a long outage so the query stays servable. Since
+    is clamped to now: created_at is attacker-controlled, and a future-dated
+    event must not poison the cursor and stall ingestion.
     """
+    floor = now_ts - SUBSCRIBE_LOOKBACK_SECONDS if SUBSCRIBE_LOOKBACK_SECONDS > 0 else None
+    candidates = [t for t in (floor, high_water) if t is not None]
+    since = max(candidates) if candidates else None
+    if since is not None:
+        since = min(since, now_ts)
     base: dict = {'limit': SUBSCRIBE_LIMIT}
-    if SUBSCRIBE_LOOKBACK_SECONDS > 0:
-        base['since'] = now_ts - SUBSCRIBE_LOOKBACK_SECONDS
+    if since is not None:
+        base['since'] = since
     return [
         {**base, 'kinds': MODERATION_KINDS},
         {**base, 'kinds': CONTENT_KINDS},
@@ -380,6 +404,9 @@ async def bridge():
     producer = make_producer()
     backoff = 1
     event_count = 0
+    # Newest created_at published to Kafka, kept across reconnects so we resume
+    # from where we left off instead of replaying the whole window each time.
+    high_water: int | None = None
 
     while True:
         try:
@@ -390,9 +417,11 @@ async def bridge():
                 # Bounded, kind-scoped subscription (recent window + capped
                 # replay); live events stream after EOSE. An unbounded {} or
                 # all-kinds filter OOMs the relay's ClickHouse and starves
-                # ingestion (returns zero) -- see iac#1230.
+                # ingestion (returns zero) -- see iac#1230. On reconnect we
+                # resume from high_water (the cursor) rather than re-fetching
+                # the whole window.
                 now_ts = int(datetime.now(timezone.utc).timestamp())
-                filters = build_subscription_filters(now_ts)
+                filters = build_subscription_filters(now_ts, high_water)
                 await ws.send(json.dumps(['REQ', sub_id, *filters]))
                 connected = True
                 backoff = 1
@@ -411,6 +440,10 @@ async def bridge():
                         event = msg[2]
                         wrapped = _wrap_nostr_event(event)
                         producer.send(KAFKA_TOPIC, value=wrapped)
+                        # Advance the reconnect cursor to the newest event seen.
+                        created = event.get('created_at')
+                        if isinstance(created, int) and (high_water is None or created > high_water):
+                            high_water = created
                         event_count += 1
                         if event_count % 100 == 1:
                             log.info(
