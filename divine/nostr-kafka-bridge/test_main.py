@@ -364,10 +364,20 @@ class _FakeWS:
 
 
 def _event_frame(created_at, kind=1984, eid='deadbeef'):
-    return json.dumps(['EVENT', 'sub', {
-        'kind': kind, 'id': eid, 'pubkey': 'p', 'created_at': created_at,
-        'tags': [], 'content': '',
-    }])
+    return json.dumps(
+        [
+            'EVENT',
+            'sub',
+            {
+                'kind': kind,
+                'id': eid,
+                'pubkey': 'p',
+                'created_at': created_at,
+                'tags': [],
+                'content': '',
+            },
+        ]
+    )
 
 
 def _eose_frame():
