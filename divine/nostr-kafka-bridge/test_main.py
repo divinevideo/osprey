@@ -355,9 +355,12 @@ class _FakeWS:
 
     async def __anext__(self):
         try:
-            return next(self._it)
+            frame = next(self._it)
         except StopIteration:
             raise StopAsyncIteration
+        if isinstance(frame, BaseException):
+            raise frame  # simulate a mid-stream WS drop
+        return frame
 
 
 def _event_frame(created_at, kind=1984, eid='deadbeef'):
@@ -371,8 +374,15 @@ def _eose_frame():
     return json.dumps(['EOSE', 'sub'])
 
 
-def _consume(frames, producer, cursor, now=5000):
-    return asyncio.run(bridge.consume_subscription(_FakeWS(frames), producer, cursor, now=lambda: now))
+def _consume(frames, producer, cursor_value, now=5000):
+    """Run consume_subscription over `frames` and return the resulting cursor
+    value. `now` may be an int or a callable. Propagates exceptions (so
+    delivery/WS-drop tests can assert on them); use a _Cursor directly to inspect
+    committed progress after an exception."""
+    c = bridge._Cursor(cursor_value)
+    now_fn = now if callable(now) else (lambda: now)
+    asyncio.run(bridge.consume_subscription(_FakeWS(frames), producer, c, now=now_fn))
+    return c.value
 
 
 def test_consume_commits_cursor_at_eose():
@@ -409,6 +419,50 @@ def test_consume_rejects_future_created_at_for_cursor():
     # (else the next reconnect skips outage-gap events).
     cursor = _consume([_eose_frame(), _event_frame(9_999_999), _event_frame(3000)], _FakeProducer(), 500, now=4000)
     assert cursor == 3000
+
+
+def test_consume_validates_created_at_at_receipt_not_after_delivery():
+    # created_at is future at RECEIPT but the wall clock crosses the skew
+    # boundary while the (slow) delivery is in flight. Validation must use the
+    # receipt-time clock, so the event is rejected and the cursor is not advanced.
+    skew = bridge.MAX_CLOCK_SKEW_SECONDS
+    clock = {'t': 1000}
+    created = 1000 + skew + 50  # future vs receipt (1000), valid vs the later reading
+
+    class _SlowProducer(_FakeProducer):
+        def send(self, topic, value=None):
+            fut = super().send(topic, value)
+            clock['t'] = 1000 + skew + 100  # time passes during delivery
+            return fut
+
+    cursor = _consume([_eose_frame(), _event_frame(created)], _SlowProducer(), 500, now=lambda: clock['t'])
+    assert cursor == 500  # validated at receipt -> rejected -> cursor unchanged
+
+
+def test_consume_preserves_committed_progress_on_delivery_failure():
+    # A live event is acked+committed, then a later delivery fails and the
+    # coroutine raises. The committed progress must survive (else the report is
+    # re-published on reconnect and trips the second-report auto-hide).
+    c = bridge._Cursor(500)
+    frames = [_eose_frame(), _event_frame(2000), _event_frame(2001)]
+    try:
+        asyncio.run(bridge.consume_subscription(_FakeWS(frames), _FakeProducer(fail_on_index=1), c, now=lambda: 9000))
+        raise AssertionError('expected delivery failure to propagate')
+    except RuntimeError:
+        pass
+    assert c.value == 2000  # 2000 acked+committed before 2001 failed
+
+
+def test_consume_preserves_committed_progress_on_ws_drop():
+    # Same invariant when the WS itself drops mid-stream after a live ack.
+    c = bridge._Cursor(500)
+    frames = [_eose_frame(), _event_frame(2000), ConnectionError('ws drop')]
+    try:
+        asyncio.run(bridge.consume_subscription(_FakeWS(frames), _FakeProducer(), c, now=lambda: 9000))
+        raise AssertionError('expected WS drop to propagate')
+    except ConnectionError:
+        pass
+    assert c.value == 2000
 
 
 if __name__ == '__main__':

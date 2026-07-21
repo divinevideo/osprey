@@ -434,28 +434,48 @@ def _deliver(producer, value) -> None:
     producer.send(KAFKA_TOPIC, value=value).get(timeout=KAFKA_DELIVERY_TIMEOUT)
 
 
-async def consume_subscription(ws, producer, committed_cursor, now=_now):
+class _Cursor:
+    """Mutable resume-cursor holder shared between consume_subscription and
+    bridge(). consume_subscription writes `.value` ONLY at safe commit points
+    (EOSE for the replay, then per acked live event), so an abnormal disconnect
+    keeps the last committed value instead of losing acked live progress -- which
+    would re-publish reports with fresh action IDs and trip the second-report
+    auto-hide rule.
+    """
+
+    __slots__ = ('value',)
+
+    def __init__(self, value: int | None = None):
+        self.value = value
+
+
+async def consume_subscription(ws, producer, cursor, now=_now):
     """Consume one relay connection, publish events to Kafka, and advance the
-    resume cursor safely. Returns the updated committed cursor.
+    resume `cursor` (a _Cursor) safely.
 
-    Cursor safety (the whole point of the cursor is to not drop moderation
-    events across reconnects, so advancing it too eagerly is a correctness bug):
-    - Advance only after Kafka delivery is acked (await the send). A broker
-      reject or WS drop then never leaves the cursor ahead of what Kafka has,
-      which would skip those events on the next reconnect.
-    - Hold progress tentative until EOSE. The stored replay can arrive unordered
-      and may be cut off mid-stream, so a mid-replay point is not a safe resume;
-      commit at EOSE, then commit per delivered live event.
-    - Reject future-dated created_at (_progress_ts) so it can't poison the
-      cursor.
+    Cursor safety (the cursor exists so reconnects neither drop nor re-publish
+    moderation events, so advancing it wrong is a correctness bug):
+    - Validate created_at against the clock AT RECEIPT, before the Kafka wait: a
+      value that is future when received must stay rejected even if the wall
+      clock advances past it during a slow delivery.
+    - Advance only AFTER Kafka acks the record (await the send), so a broker
+      reject or WS drop never leaves the cursor ahead of what Kafka has.
+    - Hold replay progress tentative until EOSE (the stored replay can arrive
+      unordered and be cut off mid-stream), then commit; after EOSE commit each
+      acked live event.
+    - Commit into the shared `cursor` so acked post-EOSE progress survives if
+      this coroutine raises; tentative replay progress and failed/undelivered
+      events are never committed.
 
-    On any failure this raises, leaving the caller's committed_cursor unchanged,
-    so the next connection re-fetches from the last safe point (at-least-once;
-    duplicate action IDs are fine -- the SML rules dedup reports via labels).
+    Residual: a drop BEFORE EOSE re-fetches the window on reconnect, so events
+    delivered in that partial replay can be re-published (at-least-once). That is
+    inherent to committing only at the replay boundary; the durable dedup for the
+    resulting false second-report is idempotency in the Osprey threshold rule
+    (keyed on the report event id), tracked separately.
     """
     global _published_count
     loop = asyncio.get_running_loop()
-    replay_hwm = committed_cursor
+    replay_hwm = cursor.value
     eosed = False
 
     async for raw in ws:
@@ -468,21 +488,22 @@ async def consume_subscription(ws, producer, committed_cursor, now=_now):
 
         if msg[0] == 'EOSE':
             eosed = True
-            committed_cursor = replay_hwm
+            cursor.value = replay_hwm  # stored replay fully delivered -> commit
             continue
         if msg[0] != 'EVENT' or len(msg) < 3:
             continue
 
         event = msg[2]
+        # Validate against the receipt-time clock BEFORE the delivery wait.
+        ts = _progress_ts(event.get('created_at'), now())
         wrapped = _wrap_nostr_event(event)
-        # Await durable delivery BEFORE advancing the cursor (see docstring).
+        # Await durable delivery BEFORE advancing the cursor.
         await loop.run_in_executor(None, _deliver, producer, wrapped)
 
-        ts = _progress_ts(event.get('created_at'), now())
         if ts is not None and (replay_hwm is None or ts > replay_hwm):
             replay_hwm = ts
         if eosed:
-            committed_cursor = replay_hwm
+            cursor.value = replay_hwm  # acked live progress -> commit (survives a later raise)
 
         _published_count += 1
         if _published_count % 100 == 1:
@@ -495,17 +516,15 @@ async def consume_subscription(ws, producer, committed_cursor, now=_now):
         else:
             log.debug('Published event %s', str(event.get('id', '?'))[:12])
 
-    return committed_cursor
-
 
 # --- Main loop ---
 async def bridge():
     global connected
     producer = make_producer()
     backoff = 1
-    # Newest created_at durably delivered to Kafka, kept across reconnects so we
-    # resume from where we left off instead of replaying the whole window.
-    committed_cursor: int | None = None
+    # Shared resume cursor: newest created_at durably delivered to Kafka, kept
+    # across reconnects and preserved if consume_subscription raises.
+    cursor = _Cursor()
 
     while True:
         try:
@@ -517,16 +536,16 @@ async def bridge():
                 # replay); live events stream after EOSE. An unbounded {} or
                 # all-kinds filter OOMs the relay's ClickHouse and starves
                 # ingestion (returns zero) -- see iac#1230. On reconnect we
-                # resume from committed_cursor rather than re-fetching the
-                # whole window.
+                # resume from cursor.value rather than re-fetching the whole
+                # window.
                 now_ts = _now()
-                filters = build_subscription_filters(now_ts, committed_cursor)
+                filters = build_subscription_filters(now_ts, cursor.value)
                 await ws.send(json.dumps(['REQ', sub_id, *filters]))
                 connected = True
                 backoff = 1
                 log.info('Connected and subscribed (filters=%s)', filters)
 
-                committed_cursor = await consume_subscription(ws, producer, committed_cursor)
+                await consume_subscription(ws, producer, cursor)
 
         except Exception as exc:
             connected = False
