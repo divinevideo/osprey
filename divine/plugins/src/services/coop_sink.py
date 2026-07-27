@@ -9,6 +9,8 @@ from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
 from reported_author import author_for_features, content_id_for_features
 
+from .nostr_media import fetch_event_media
+
 logger = get_logger(__name__)
 
 ACTIONABLE_VERDICTS = {'flag_for_review', 'restrict', 'auto_hide', 'ban'}
@@ -27,19 +29,29 @@ class COOPSink(BaseOutputSink):
       - ``DIVINE_COOP_API_KEY``: Organization API key for COOP. Required.
       - ``DIVINE_COOP_CONTENT_TYPE``: Content type name configured in COOP
         (default: ``nostr_event``).
+      - ``DIVINE_RELAY_WS_URL``: relay websocket URL used to fetch the reported
+        event's media so the MRT can show the video under review
+        (e.g. ``wss://relay.staging.divine.video``). Optional; if unset, items are
+        submitted without media (fail-open).
     """
 
     timeout: float = 5.0
+    # Short, fail-open bound on the relay media lookup so a slow relay never backs up
+    # the sink; on timeout the item is submitted without media.
+    media_timeout: float = 3.0
 
     def __init__(self) -> None:
         self._url = os.environ.get('DIVINE_COOP_URL', '')
         self._api_key = os.environ.get('DIVINE_COOP_API_KEY', '')
         self._content_type = os.environ.get('DIVINE_COOP_CONTENT_TYPE', 'nostr_event')
+        self._relay_ws_url = os.environ.get('DIVINE_RELAY_WS_URL', '')
 
         if not self._url:
             logger.info('DIVINE_COOP_URL not set. COOPSink disabled.')
         elif not self._api_key:
             logger.warning('DIVINE_COOP_API_KEY not set. COOPSink will fail auth.')
+        if not self._relay_ws_url:
+            logger.info('DIVINE_RELAY_WS_URL not set. COOP items will omit media (no MRT video).')
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -119,6 +131,24 @@ class COOPSink(BaseOutputSink):
             content['label_namespace'] = features['LabelNamespace']
         if features.get('NoteText'):
             content['text'] = features['NoteText']
+
+        # Resolve the reported content's playable media so the MRT can show the video
+        # under review. content_id is the moderated event's id, but a report/label event
+        # doesn't carry the media (it lives in that event's NIP-92 imeta tag), so fetch
+        # it from the relay. Fail-open: no relay URL, or any fetch failure/timeout, just
+        # means the item is submitted without media (never dropped, never blocked).
+        if self._relay_ws_url:
+            try:
+                media_url, media_thumbnail = fetch_event_media(
+                    self._relay_ws_url, content_id, timeout=self.media_timeout
+                )
+                if media_url:
+                    content['media_url'] = media_url
+                if media_thumbnail:
+                    content['media_thumbnail'] = media_thumbnail
+            except Exception:
+                # Media is best-effort enrichment; never let it block a review submission.
+                logger.exception('COOP media lookup failed for %s; submitting without media', content_id)
 
         payload: dict[str, Any] = {
             'contentId': content_id,
