@@ -78,6 +78,11 @@ labels:
     connotation: negative
     description: At least one child-safety report received for this event (distinct from CSAM)
 
+  csam_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one CSAM report received for this event; dedups first-report review
+
   harassment_reported:
     valid_for: [EventId, ReportedEventId]
     connotation: negative

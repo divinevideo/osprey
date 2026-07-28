@@ -58,9 +58,12 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `TrustedReporterNSFW`  UInt8 DEFAULT 0,
     `FirstChildSafetyReport` UInt8 DEFAULT 0,
     `FirstHarassmentReport`  UInt8 DEFAULT 0,
+    `FirstCSAMReport`        UInt8 DEFAULT 0,
     `ConfirmedNudity`      UInt8 DEFAULT 0,
     `ConfirmedViolence`    UInt8 DEFAULT 0,
     `ConfirmedCSAM`        UInt8 DEFAULT 0,
+    `ConfirmedCSAMHashOnlyNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedCSAMHashOnlyEmptyTarget` UInt8 DEFAULT 0,
     `ConfirmedAIGenerated` UInt8 DEFAULT 0,
     `AgeRestricted`        UInt8 DEFAULT 0,
     `NeedsReview`          UInt8 DEFAULT 0,
@@ -107,6 +110,11 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceRepo
 -- column). Coupled to divine/rules/rules/reports/first_report_review.sml.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstChildSafetyReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstHarassmentReport` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstCSAMReport` UInt8 DEFAULT 0;
+-- label_routing.sml's two hash-only CSAM rules were never added here, so their columns
+-- were missing live and any batch containing a hit failed to insert.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyEmptyTarget` UInt8 DEFAULT 0;
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly
