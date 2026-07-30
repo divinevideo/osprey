@@ -111,7 +111,8 @@ def test_caches_a_successful_resolution():
     assert len(calls) == 1
 
 
-def test_does_not_cache_failures_so_transient_errors_retry():
+def test_a_raised_failure_is_cached_briefly_then_retries():
+    """Caps attacker-driven miss storms without suppressing recovery for long."""
     calls = []
 
     def flaky(event_id):
@@ -121,17 +122,20 @@ def test_does_not_cache_failures_so_transient_errors_retry():
         return _event()
 
     cache = {}
-    assert resolve_author(EVENT_ID, flaky, cache=cache) == ''
-    assert resolve_author(EVENT_ID, flaky, cache=cache) == AUTHOR
+    clock = iter([0.0, 5.0, 100.0])
+    now = lambda: next(clock)  # noqa: E731
+
+    assert resolve_author(EVENT_ID, flaky, cache=cache, now=now) == ''
+    # Within the negative TTL: served from cache, no second outbound call.
+    assert resolve_author(EVENT_ID, flaky, cache=cache, now=now) == ''
+    assert len(calls) == 1
+    # Past it: retried and recovered.
+    assert resolve_author(EVENT_ID, flaky, cache=cache, now=now) == AUTHOR
     assert len(calls) == 2
 
 
-def test_does_not_cache_an_unresolvable_response():
-    """Distinct from the raising case: the fetch succeeds but is untrustworthy.
-
-    A not-found or id-mismatched answer must not pin an empty result for the
-    whole TTL, or one bad reply blocks resolution until it expires.
-    """
+def test_an_unresolvable_response_is_cached_briefly_then_retries():
+    """Distinct from the raising case: the fetch succeeds but is untrustworthy."""
     calls = []
 
     def eventually_ok(event_id):
@@ -141,12 +145,34 @@ def test_does_not_cache_an_unresolvable_response():
         return _event()
 
     cache = {}
-    assert resolve_author(EVENT_ID, eventually_ok, cache=cache) == ''
-    assert resolve_author(EVENT_ID, eventually_ok, cache=cache) == AUTHOR
+    clock = iter([0.0, 5.0, 100.0])
+    now = lambda: next(clock)  # noqa: E731
+
+    assert resolve_author(EVENT_ID, eventually_ok, cache=cache, now=now) == ''
+    assert resolve_author(EVENT_ID, eventually_ok, cache=cache, now=now) == ''
+    assert len(calls) == 1
+    assert resolve_author(EVENT_ID, eventually_ok, cache=cache, now=now) == AUTHOR
     assert len(calls) == 2
 
 
-def test_does_not_cache_an_id_mismatched_response():
+def test_negative_ttl_is_much_shorter_than_the_positive_one():
+    """The whole point: a failure must not linger like a success."""
+    from reported_author import CACHE_TTL_SECONDS, NEGATIVE_CACHE_TTL_SECONDS
+
+    assert NEGATIVE_CACHE_TTL_SECONDS < CACHE_TTL_SECONDS
+
+
+def test_repeated_misses_on_distinct_ids_still_each_cost_one_call():
+    """Negative caching caps repeats of the SAME id; it cannot dedupe distinct
+    ids, so this documents the residual cost rather than pretending otherwise."""
+    calls = []
+    cache = {}
+    for i in range(50):
+        resolve_author(f'{i:064x}', lambda e: calls.append(e), cache=cache)
+    assert len(calls) == 50
+
+
+def test_an_id_mismatched_response_is_cached_briefly_then_retries():
     calls = []
 
     def wrong_then_right(event_id):
@@ -156,8 +182,11 @@ def test_does_not_cache_an_id_mismatched_response():
         return _event()
 
     cache = {}
-    assert resolve_author(EVENT_ID, wrong_then_right, cache=cache) == ''
-    assert resolve_author(EVENT_ID, wrong_then_right, cache=cache) == AUTHOR
+    clock = iter([0.0, 100.0])
+    now = lambda: next(clock)  # noqa: E731
+
+    assert resolve_author(EVENT_ID, wrong_then_right, cache=cache, now=now) == ''
+    assert resolve_author(EVENT_ID, wrong_then_right, cache=cache, now=now) == AUTHOR
     assert len(calls) == 2
 
 
@@ -216,11 +245,13 @@ def test_cache_is_bounded():
 
 
 def test_direct_content_uses_the_events_own_author():
-    assert author_for_features({'Pubkey': AUTHOR}) == AUTHOR
+    # Kind is always present on real features; a video event is not a wrapper.
+    assert author_for_features({'Kind': 34236, 'Pubkey': AUTHOR}) == AUTHOR
 
 
 def test_report_uses_the_resolved_author_not_the_reporter():
     features = {
+        'Kind': 1984,
         'Pubkey': WRAPPER_SIGNER,  # the reporter signed the report
         'ReportedEventId': EVENT_ID,
         'ReportedAuthorPubkey': AUTHOR,
@@ -231,6 +262,7 @@ def test_report_uses_the_resolved_author_not_the_reporter():
 def test_report_with_unresolvable_author_yields_nothing_not_the_reporter():
     """The critical case. Falling back here would target whoever filed the report."""
     features = {
+        'Kind': 1984,
         'Pubkey': WRAPPER_SIGNER,
         'ReportedEventId': EVENT_ID,
         'ReportedAuthorPubkey': '',
@@ -239,12 +271,13 @@ def test_report_with_unresolvable_author_yields_nothing_not_the_reporter():
 
 
 def test_report_with_no_resolved_feature_at_all_yields_nothing():
-    features = {'Pubkey': WRAPPER_SIGNER, 'ReportedEventId': EVENT_ID}
+    features = {'Kind': 1984, 'Pubkey': WRAPPER_SIGNER, 'ReportedEventId': EVENT_ID}
     assert author_for_features(features) == ''
 
 
 def test_label_uses_the_target_author_not_the_labeler():
     features = {
+        'Kind': 1985,
         'Pubkey': WRAPPER_SIGNER,  # our own moderation identity signs labels
         'LabelTargetEvent': EVENT_ID,
         'LabelTargetAuthorPubkey': AUTHOR,
@@ -254,6 +287,7 @@ def test_label_uses_the_target_author_not_the_labeler():
 
 def test_label_with_unresolvable_author_yields_nothing_not_our_own_identity():
     features = {
+        'Kind': 1985,
         'Pubkey': WRAPPER_SIGNER,
         'LabelTargetEvent': EVENT_ID,
         'LabelTargetAuthorPubkey': '',
@@ -261,9 +295,14 @@ def test_label_with_unresolvable_author_yields_nothing_not_our_own_identity():
     assert author_for_features(features) == ''
 
 
-def test_label_takes_precedence_over_report_mirroring_content_id_resolution():
-    """userId must describe the same event that becomes contentId."""
+def test_kind_decides_not_feature_presence():
+    """An event has exactly one Kind, so Kind alone picks the resolved field.
+
+    Constructed dict: a label that also carries report features. Only Kind
+    should matter, so the report side must be ignored entirely.
+    """
     features = {
+        'Kind': 1985,
         'LabelTargetEvent': EVENT_ID,
         'LabelTargetAuthorPubkey': AUTHOR,
         'ReportedEventId': OTHER_ID,
@@ -296,7 +335,7 @@ def test_p_only_report_yields_nothing_not_the_reporter():
 
 
 def test_p_only_report_does_not_trust_the_claimed_pubkey_either():
-    features = {'Pubkey': WRAPPER_SIGNER, 'ReportedPubkey': AUTHOR, 'ReportedAuthorPubkey': ''}
+    features = {'Kind': 1984, 'Pubkey': WRAPPER_SIGNER, 'ReportedPubkey': AUTHOR, 'ReportedAuthorPubkey': ''}
     assert author_for_features(features) == ''
 
 
@@ -338,3 +377,118 @@ def test_normalize_output_is_always_clean(value):
     """
     out = normalize_event_id(value)
     assert out == '' or re.fullmatch(r'[0-9a-f]{64}', out)
+
+
+# --- author_for_features keys on Kind, not on feature presence ---
+#
+# Inferring "is this a wrapper?" from which optional derived features happen to
+# be populated is unsound: a hash-only CSAM label has no LabelTargetEvent, and a
+# tag-less report has neither ReportedEventId nor ReportedPubkey. Both then fell
+# through to Pubkey, which on a wrapper is the reporter or our own moderation
+# identity. Since COOP's `creator` is the reversal target, that put the wrong
+# account in front of Unban-User, and will put it in front of the purging
+# banpubkey once s-t-s#190 moves forward actions onto `creator`.
+
+MODERATION_IDENTITY = '8fd5eb6d8f362163bc00a5ab6b4a3167dbf32d00ec4efdbcf43b3c9514433b7e'
+
+
+def test_hash_only_csam_label_never_returns_our_own_identity():
+    """ConfirmedCSAMHashOnlyNullTarget is live and emits an actionable verdict.
+
+    LabelTargetEvent is None by construction, so a presence check misses it.
+    """
+    features = {
+        'Kind': 1985,
+        'Pubkey': MODERATION_IDENTITY,
+        'LabelTargetEvent': None,
+        'LabelContentHash': 'a' * 64,
+    }
+    assert author_for_features(features) == ''
+
+
+def test_hash_only_csam_label_with_empty_target_never_returns_our_own_identity():
+    features = {
+        'Kind': 1985,
+        'Pubkey': MODERATION_IDENTITY,
+        'LabelTargetEvent': '',
+        'LabelContentHash': 'a' * 64,
+    }
+    assert author_for_features(features) == ''
+
+
+def test_report_with_neither_e_nor_p_tag_never_returns_the_reporter():
+    features = {'Kind': 1984, 'Pubkey': WRAPPER_SIGNER}
+    assert author_for_features(features) == ''
+
+
+def test_report_with_empty_e_tag_never_returns_the_reporter():
+    features = {'Kind': 1984, 'Pubkey': WRAPPER_SIGNER, 'ReportedEvent': ''}
+    assert author_for_features(features) == ''
+
+
+def test_label_with_only_a_p_tag_never_returns_our_own_identity():
+    features = {'Kind': 1985, 'Pubkey': MODERATION_IDENTITY, 'LabelTargetPubkey': AUTHOR}
+    assert author_for_features(features) == ''
+
+
+def test_video_event_uses_its_own_author():
+    assert author_for_features({'Kind': 34236, 'Pubkey': AUTHOR}) == AUTHOR
+
+
+@pytest.mark.parametrize('kind', [1984, '1984'])
+def test_kind_is_coerced_so_a_string_still_counts_as_a_wrapper(kind):
+    features = {'Kind': kind, 'Pubkey': WRAPPER_SIGNER, 'ReportedEventId': EVENT_ID}
+    assert author_for_features(features) == ''
+
+
+def test_unknown_kind_with_wrapper_indicators_still_refuses():
+    """Defence in depth: if Kind is missing or unexpected but the item looks
+    wrapped, refuse rather than fall back to the wrapper's signer."""
+    features = {'Pubkey': WRAPPER_SIGNER, 'ReportedEventId': EVENT_ID}
+    assert author_for_features(features) == ''
+
+
+def test_label_kind_branch_is_load_bearing_not_masked_by_the_backstop():
+    """A malformed label with no target features at all.
+
+    The wrapper-marker backstop cannot catch this one, so only keying on Kind
+    prevents falling through to Pubkey, which on a label is our own identity.
+    """
+    features = {'Kind': 1985, 'Pubkey': MODERATION_IDENTITY}
+    assert author_for_features(features) == ''
+
+
+def test_report_kind_branch_is_load_bearing_not_masked_by_the_backstop():
+    features = {'Kind': 1984, 'Pubkey': WRAPPER_SIGNER}
+    assert author_for_features(features) == ''
+
+
+def test_string_kind_resolves_positively_not_just_defensively():
+    """Pins the coercion itself.
+
+    Without it, Kind is unrecognised and the backstop returns '' — which looks
+    correct but is the wrong reason, and would silently stop resolving authors
+    if Kind ever arrived as a string.
+    """
+    features = {
+        'Kind': '1985',
+        'Pubkey': WRAPPER_SIGNER,
+        'LabelTargetEvent': EVENT_ID,
+        'LabelTargetAuthorPubkey': AUTHOR,
+    }
+    assert author_for_features(features) == AUTHOR
+
+
+def test_string_kind_resolves_positively_for_reports_too():
+    features = {
+        'Kind': '1984',
+        'Pubkey': WRAPPER_SIGNER,
+        'ReportedEventId': EVENT_ID,
+        'ReportedAuthorPubkey': AUTHOR,
+    }
+    assert author_for_features(features) == AUTHOR
+
+
+def test_bool_is_not_treated_as_a_kind():
+    """True == 1 in Python; it must not be coerced into a kind."""
+    assert author_for_features({'Kind': True, 'Pubkey': AUTHOR}) == AUTHOR

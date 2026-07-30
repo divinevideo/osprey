@@ -52,12 +52,18 @@ echo "Waiting for worker consumer to stabilize (3s)..."
 sleep 3
 
 echo ""
+# The reported event id and claimed pubkey are real 64-char hex. They have to be:
+# ResolveEventAuthor rejects anything else without even attempting a lookup, so a
+# placeholder id silently skips the resolution path and the test proves nothing
+# about it. With DIVINE_RELAY_API_URL unset (the compose default) resolution
+# still fails closed and ReportedAuthorPubkey stays empty, which is the intended
+# behaviour; set that var to exercise a successful resolution.
 echo "Sending test events to Kafka..."
 
 # Event 1: Kind 1984 report from trusted reporter (should trigger TrustedReporterNSFW)
 NOW=$(date +%s)
 REPORT_EVENT=$(cat <<JSON
-{"send_time":"$TIMESTAMP","data":{"action_id":90001,"action_name":"nostr_kind_1984","data":{"event_id":"e2e_test_report_001","pubkey":"$PUBKEY","kind":1984,"created_at":$NOW,"content":"nudity report","tags":[["report","nudity"],["e","e2e_test_target_001"],["p","e2e_test_target_pk_001"]],"sig":"test","reported_event_id":"e2e_test_target_001","reported_pubkey":"e2e_test_target_pk_001","report_reason":"nudity"}}}
+{"send_time":"$TIMESTAMP","data":{"action_id":90001,"action_name":"nostr_kind_1984","data":{"event_id":"e2e_test_report_001","pubkey":"$PUBKEY","kind":1984,"created_at":$NOW,"content":"nudity report","tags":[["report","nudity"],["e","e2e0000000000000000000000000000000000000000000000000000000000001"],["p","e2e0000000000000000000000000000000000000000000000000000000000002"]],"sig":"test","reported_event_id":"e2e0000000000000000000000000000000000000000000000000000000000001","reported_pubkey":"e2e0000000000000000000000000000000000000000000000000000000000002","report_reason":"nudity"}}}
 JSON
 )
 echo "$REPORT_EVENT" | docker exec -i divine-kafka \

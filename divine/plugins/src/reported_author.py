@@ -24,9 +24,11 @@ Two properties matter and are tested:
   Callers must treat that as "no authoritative author" and decline to enforce,
   rather than falling back to the claimed value.
 
-Failures are deliberately not cached, so a transient relay problem retries
-rather than pinning an empty answer for the whole TTL. Reports are low volume,
-so the extra calls are affordable.
+Failures are cached far more briefly than successes. Not caching them at all is
+an amplification vector, since an attacker can publish reports e-tagging random
+64-char hex ids, each a guaranteed miss and an outbound request at a rate they
+choose. Caching them for the full positive TTL would instead let one blip
+suppress enforcement for minutes. The short negative TTL sits between the two.
 
 This module imports nothing from Osprey so it can be unit tested without the
 engine installed.
@@ -42,6 +44,10 @@ from typing import Any, Callable, Dict, MutableMapping, Optional, Tuple
 HEX64_RE = re.compile(r'^[0-9a-f]{64}$', re.IGNORECASE)
 
 CACHE_TTL_SECONDS = 300.0
+# Failures are cached far more briefly than successes: long enough to blunt an
+# attacker-driven miss storm, short enough that a transient outage does not
+# suppress enforcement for minutes.
+NEGATIVE_CACHE_TTL_SECONDS = 30.0
 CACHE_MAX_SIZE = 1000
 
 
@@ -86,6 +92,7 @@ def resolve_author(
     cache: MutableMapping[str, Tuple[str, float]],
     now: Optional[Callable[[], float]] = None,
     ttl: float = CACHE_TTL_SECONDS,
+    negative_ttl: float = NEGATIVE_CACHE_TTL_SECONDS,
     max_size: int = CACHE_MAX_SIZE,
 ) -> str:
     """Resolve the author of `event_id`, returning '' when it cannot be trusted.
@@ -108,12 +115,18 @@ def resolve_author(
     try:
         payload = fetch(wanted)
     except Exception:
+        _store(cache, wanted, '', current + negative_ttl, max_size, current)
         return ''
 
     author = extract_author(payload, wanted)
     if not author:
-        # Not cached: a transient failure should retry rather than pin an empty
-        # answer for the whole TTL.
+        # Cached, but only briefly. Not caching at all is an amplification
+        # vector: an attacker publishes reports e-tagging random 64-char hex
+        # ids, every one a guaranteed miss, and each becomes an uncached
+        # outbound request whose rate they control. A short negative TTL caps
+        # the repeats while still letting a transient failure retry soon,
+        # rather than pinning an empty answer for the full positive TTL.
+        _store(cache, wanted, '', current + negative_ttl, max_size, current)
         return ''
 
     # `current` is reused rather than re-reading the clock, so one call consumes
@@ -145,31 +158,76 @@ def _evict(cache: MutableMapping[str, Tuple[str, float]], max_size: int, now: fl
             del cache[key]
 
 
+REPORT_KIND = 1984
+LABEL_KIND = 1985
+
+# Features that only ever appear on a wrapper. Used as a backstop when Kind is
+# missing or unrecognised.
+_WRAPPER_MARKERS = (
+    'LabelTargetEvent',
+    'LabelTargetPubkey',
+    'LabelContentHash',
+    'ReportedEventId',
+    'ReportedEvent',
+    'ReportedPubkey',
+)
+
+
+def _kind(value: Any) -> Optional[int]:
+    """Coerce Kind to an int, or None if it is absent or not a whole number.
+
+    No bool special-case: `isinstance(True, int)` is already True and yields 1,
+    which is not a wrapper kind, so a bool falls through to the marker backstop
+    exactly as an unrecognised kind should.
+    """
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 def author_for_features(features: Any) -> str:
     """Return whoever signed the content being acted on, or '' if unresolvable.
 
     Reports and labels WRAP a target event. On those, the wrapper's own `Pubkey`
     is the reporter or our own moderation identity, not the offender, so it must
-    never be used as an enforcement target. Direct content events are not
-    wrapped, and there `Pubkey` IS the author.
+    never become an enforcement target. Direct content events are not wrapped,
+    and there `Pubkey` IS the author.
 
-    The key order mirrors COOPSink's `_resolve_content_id`, so the returned
-    author always belongs to the same event that becomes `contentId`.
+    **This keys on `Kind`, deliberately, and not on which optional features
+    happen to be populated.** Presence checks are unsound, because a wrapper can
+    legitimately carry none of its target features:
+
+    - A hash-only CSAM label has `LabelTargetEvent = None` by construction
+      (`ConfirmedCSAMHashOnlyNullTarget` is a live rule emitting an actionable
+      verdict), so a presence check misses it and returns our own moderation
+      identity.
+    - NIP-56 permits a report with only a p-tag, or with neither tag, so a
+      report can carry no target features at all and return the reporter.
+
+    Both put the wrong account into COOP's `creator`, which is the target of
+    Unban-User and Unsuspend-User today, and of the purging `banpubkey` once
+    s-t-s#190 moves forward actions onto `creator`.
+
+    Returns '' whenever a wrapper's target cannot be resolved. Callers must
+    treat that as "no authoritative author" and decline to enforce.
     """
     if not isinstance(features, dict):
         return ''
 
-    if features.get('LabelTargetEvent'):
+    kind = _kind(features.get('Kind'))
+
+    if kind == LABEL_KIND:
         return str(features.get('LabelTargetAuthorPubkey') or '')
 
-    # ReportedPubkey is checked as well as ReportedEventId because NIP-56 allows
-    # a report with only a p-tag and no e-tag, e.g. a profile report. The bridge
-    # sets reported_event_id only when an e-tag exists, so keying solely on it
-    # would let a p-only report fall through to Pubkey, which on a report is the
-    # reporter. There is no event to resolve an author from in that case, so the
-    # honest answer is none.
-    if features.get('ReportedEventId') or features.get('ReportedPubkey'):
+    if kind == REPORT_KIND:
         return str(features.get('ReportedAuthorPubkey') or '')
+
+    # Kind absent or unrecognised. If it nonetheless looks wrapped, refuse
+    # rather than fall back to the wrapper's signer.
+    if any(features.get(marker) for marker in _WRAPPER_MARKERS):
+        return ''
 
     return str(features.get('Pubkey') or '')
 

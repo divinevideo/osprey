@@ -12,6 +12,9 @@ logger = get_logger(__name__)
 
 _TIMEOUT = 1.5
 
+# One warning per process, not one per report.
+_warned_missing_url = False
+
 
 class ResolveEventAuthorArguments(ArgumentsBase):
     event_id: str
@@ -29,7 +32,7 @@ class ResolveEventAuthor(UDFBase[ResolveEventAuthorArguments, str]):
     Returns '' on any failure, including a not-found event, an unreachable
     relay API, or a response whose event id does not match the request.
     Callers must treat '' as "no authoritative author" and decline to enforce.
-    See `reported_author` for the guarantees and why failures are not cached.
+    See `reported_author` for the guarantees and the caching behaviour.
 
     Reads funnelcake's ``GET /api/event/{id}``, which serves the event straight
     from ClickHouse. That matters: it gives a definitive found or not-found,
@@ -41,8 +44,9 @@ class ResolveEventAuthor(UDFBase[ResolveEventAuthorArguments, str]):
     ``sig``), a missing event is a 404, and no authentication is required.
 
     Configuration (environment variable):
-      - ``DIVINE_RELAY_API_URL``: Base URL of the relay's HTTP API
-        (default: ``https://relay.divine.video``).
+      - ``DIVINE_RELAY_API_URL``: Base URL of the relay's HTTP API, e.g.
+        ``https://relay.divine.video``. **Required, with no default.** Unset,
+        resolution fails closed and nothing carries a verified creator.
     """
 
     def execute(self, execution_context: ExecutionContext, arguments: ResolveEventAuthorArguments) -> str:
@@ -66,7 +70,21 @@ class ResolveEventAuthor(UDFBase[ResolveEventAuthorArguments, str]):
         return author
 
     def _fetch(self, event_id: str) -> Optional[Any]:
-        base_url = os.environ.get('DIVINE_RELAY_API_URL', 'https://relay.divine.video').rstrip('/')
+        base_url = os.environ.get('DIVINE_RELAY_API_URL', '').rstrip('/')
+        if not base_url:
+            # Deliberately no default. Defaulting to production would mean a
+            # local or staging worker silently querying prod, and on staging the
+            # events it needs are not there, so the feature would appear to work
+            # while returning '' for everything. Unset means unconfigured, which
+            # fails closed, matching RelayManagerSink and COOPSink.
+            global _warned_missing_url
+            if not _warned_missing_url:
+                _warned_missing_url = True
+                logger.warning(
+                    'DIVINE_RELAY_API_URL not set. Reported-event authors cannot be resolved, '
+                    'so no item will carry a verified creator.'
+                )
+            return None
 
         resp = requests.get(
             f'{base_url}/api/event/{event_id}',
