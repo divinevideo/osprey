@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from reported_author import (  # noqa: E402
     author_for_features,
+    content_id_for_features,
     extract_author,
     normalize_event_id,
     resolve_author,
@@ -492,3 +493,95 @@ def test_string_kind_resolves_positively_for_reports_too():
 def test_bool_is_not_treated_as_a_kind():
     """True == 1 in Python; it must not be coerced into a kind."""
     assert author_for_features({'Kind': True, 'Pubkey': AUTHOR}) == AUTHOR
+
+
+# --- S1: the marker backstop must cover label bodies too ---
+
+
+def test_backstop_catches_a_label_body_with_only_label_tags():
+    """Kind unparseable, only L/l features present. Without label markers this
+    fell through to Pubkey, which on a label is our own moderation identity."""
+    features = {'Pubkey': MODERATION_IDENTITY, 'LabelNamespace': 'content-warning', 'LabelValue': 'csam'}
+    assert author_for_features(features) == ''
+
+
+def test_backstop_catches_a_report_body_with_only_a_reason():
+    features = {'Pubkey': WRAPPER_SIGNER, 'ReportReason': 'nudity'}
+    assert author_for_features(features) == ''
+
+
+def test_backstop_does_not_treat_ordinary_content_as_wrapped():
+    """LabelSignerPubkey is deliberately NOT a marker: it reads $.pubkey and is
+    populated on every event, so treating it as one would make every note look
+    like a wrapper and stop resolving authors for real content."""
+    features = {'Kind': 1, 'Pubkey': AUTHOR, 'LabelSignerPubkey': AUTHOR}
+    assert author_for_features(features) == AUTHOR
+
+
+# --- S2: Kind coercion must not raise on inputs isdigit() accepts ---
+
+
+@pytest.mark.parametrize('exotic', ['²', '³', '¹', '⑥'])
+def test_kind_coercion_does_not_raise_on_superscripts_and_circled_digits(exotic):
+    """str.isdigit() is True for these but int() rejects them. The raise escaped
+    author_for_features and left COOPSink's own try block."""
+    assert author_for_features({'Kind': exotic, 'Pubkey': AUTHOR, 'ReportedEventId': EVENT_ID}) == ''
+
+
+def test_kind_coercion_rejects_non_ascii_decimals():
+    """Arabic-Indic digits convert cleanly but are not a kind we should honour."""
+    assert author_for_features({'Kind': '١٩٨٤', 'Pubkey': AUTHOR}) == AUTHOR
+
+
+# --- S3: a miss storm must not evict legitimate resolutions ---
+
+
+def test_negative_entries_cannot_evict_positive_ones():
+    """The negative TTL introduced this: negatives shared one bounded cache, so
+    a storm of distinct-id misses flushed real answers and made honest traffic
+    re-fetch, increasing load rather than reducing it."""
+    cache = {}
+    good = [f'{i:064x}' for i in range(50)]
+    for gid in good:
+        resolve_author(gid, lambda _, x=gid: {'id': x, 'pubkey': AUTHOR}, cache=cache, now=lambda: 0.0)
+
+    for i in range(3000):
+        resolve_author(f'{i + 9000:064x}', lambda _: None, cache=cache, now=lambda: 1.0)
+
+    survivors = [g for g in good if resolve_author(g, lambda _: pytest.fail('refetched'), cache=cache, now=lambda: 2.0)]
+    assert len(survivors) == 50
+
+
+# --- S4: contentId and userId must describe the same event ---
+
+
+def test_content_id_and_author_describe_the_same_event_for_a_report():
+    features = {
+        'Kind': 1984,
+        'EventId': OTHER_ID,
+        'ReportedEventId': EVENT_ID,
+        'ReportedAuthorPubkey': AUTHOR,
+        'LabelTargetEvent': 'b' * 64,
+    }
+    assert content_id_for_features(features) == EVENT_ID
+    assert author_for_features(features) == AUTHOR
+
+
+def test_content_id_and_author_describe_the_same_event_for_a_label():
+    features = {
+        'Kind': 1985,
+        'EventId': OTHER_ID,
+        'LabelTargetEvent': EVENT_ID,
+        'LabelTargetAuthorPubkey': AUTHOR,
+        'ReportedEventId': 'b' * 64,
+    }
+    assert content_id_for_features(features) == EVENT_ID
+    assert author_for_features(features) == AUTHOR
+
+
+def test_content_id_falls_back_to_the_event_itself_for_direct_content():
+    assert content_id_for_features({'Kind': 34236, 'EventId': EVENT_ID}) == EVENT_ID
+
+
+def test_content_id_is_none_when_nothing_identifies_the_content():
+    assert content_id_for_features({'Kind': 1984}) is None

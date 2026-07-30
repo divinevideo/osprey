@@ -2,6 +2,7 @@ import os
 from typing import Any, Optional
 
 import requests
+import sentry_sdk
 from osprey.engine.executor.execution_context import ExecutionContext
 from osprey.engine.udf.arguments import ArgumentsBase
 from osprey.engine.udf.base import UDFBase
@@ -49,6 +50,25 @@ class ResolveEventAuthor(UDFBase[ResolveEventAuthorArguments, str]):
         resolution fails closed and nothing carries a verified creator.
     """
 
+    def __init__(self, validation_context: Any, arguments: Any) -> None:
+        super().__init__(validation_context, arguments)
+        # Checked here, not on the first report, so the signal is guaranteed at
+        # startup like COOPSink's and RelayManagerSink's. Warning lazily meant a
+        # worker that happened to process no reports never warned at all, and
+        # the failure only surfaced much later as a refused enforcement.
+        global _warned_missing_url
+        if not os.environ.get('DIVINE_RELAY_API_URL', '').strip() and not _warned_missing_url:
+            _warned_missing_url = True
+            message = (
+                'DIVINE_RELAY_API_URL not set. Reported-event authors cannot be resolved, '
+                'so no item will carry a verified creator and reversals will refuse.'
+            )
+            logger.warning(message)
+            # Unlike a disabled sink, the pipeline keeps running and looks
+            # healthy while silently producing items with no creator. Make that
+            # alertable rather than a single line in one log window.
+            sentry_sdk.capture_message(message, level='warning')
+
     def execute(self, execution_context: ExecutionContext, arguments: ResolveEventAuthorArguments) -> str:
         author = resolve_author(arguments.event_id, self._fetch, cache=shared_cache())
 
@@ -76,14 +96,8 @@ class ResolveEventAuthor(UDFBase[ResolveEventAuthorArguments, str]):
             # local or staging worker silently querying prod, and on staging the
             # events it needs are not there, so the feature would appear to work
             # while returning '' for everything. Unset means unconfigured, which
-            # fails closed, matching RelayManagerSink and COOPSink.
-            global _warned_missing_url
-            if not _warned_missing_url:
-                _warned_missing_url = True
-                logger.warning(
-                    'DIVINE_RELAY_API_URL not set. Reported-event authors cannot be resolved, '
-                    'so no item will carry a verified creator.'
-                )
+            # fails closed, matching RelayManagerSink and COOPSink. Warned once
+            # at construction; see __init__.
             return None
 
         resp = requests.get(

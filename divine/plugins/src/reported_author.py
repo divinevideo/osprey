@@ -17,18 +17,26 @@ report, they cannot change who signed it.
 
 Two properties matter and are tested:
 
-- **The response is verified.** The returned event's id must equal the id we
-  asked for. Without that check we would only have swapped a reporter-controlled
-  pubkey for a relay-controlled one.
+- **The response is bound to the request.** The returned event's id must equal
+  the id we asked for, so the relay cannot answer with a *different stored
+  event* and thereby choose the pubkey we enforce against. Note the limit: the
+  id is not recomputed from the body and the signature is not checked, so a
+  compromised relay could still fabricate a response carrying the requested id
+  and any pubkey. Closing that needs canonical NIP-01 id recomputation and a
+  Schnorr dependency, and belongs with a decision about whether the relay sits
+  inside our trust boundary at all.
 - **It fails closed.** Any failure yields an empty string, never a guess.
   Callers must treat that as "no authoritative author" and decline to enforce,
   rather than falling back to the claimed value.
 
-Failures are cached far more briefly than successes. Not caching them at all is
-an amplification vector, since an attacker can publish reports e-tagging random
-64-char hex ids, each a guaranteed miss and an outbound request at a rate they
-choose. Caching them for the full positive TTL would instead let one blip
-suppress enforcement for minutes. The short negative TTL sits between the two.
+Failures are cached briefly, and the honest limit of that is worth stating:
+**it does not stop an attacker driving outbound requests.** Reports e-tagging
+distinct random 64-char hex ids are all guaranteed misses, so they still cost
+one request each; caching only collapses repeats of the *same* id, which is not
+what an attacker would send. The short negative TTL is there so one bad reply
+does not pin an empty answer for the full positive TTL, and so eviction has
+something cheap to discard first. Bounding the outbound rate needs a cap or a
+circuit breaker, which is not implemented here.
 
 This module imports nothing from Osprey so it can be unit tested without the
 engine installed.
@@ -71,9 +79,10 @@ def normalize_event_id(value: Any) -> str:
 def extract_author(payload: Any, requested_event_id: str) -> str:
     """Return the signer of `payload`, but only if it is the event we asked for.
 
-    The id check is the security boundary: a relay (or anything between us and
-    it) must not be able to answer with a different event and thereby choose the
-    pubkey we enforce against.
+    Binds the response to the request: a relay cannot answer with a *different
+    stored event* and thereby choose the pubkey we enforce against. It does not
+    verify the body, so a compromised relay could fabricate one carrying the
+    requested id. See the module docstring for why that is left open.
     """
     if not isinstance(payload, dict):
         return ''
@@ -149,9 +158,21 @@ def _store(
 
 
 def _evict(cache: MutableMapping[str, Tuple[str, float]], max_size: int, now: float) -> None:
-    """Drop expired entries first, then oldest-inserted if still over budget."""
+    """Make room, sacrificing the least valuable entries first.
+
+    Order matters. Negative entries are evicted ahead of positive ones because
+    an attacker controls how many of them exist: reports e-tagging distinct
+    random ids are all guaranteed misses, and if negatives could evict positives
+    a storm would flush real answers and force honest traffic to re-fetch,
+    raising load on the relay API rather than lowering it. Evicting negatives
+    first means a storm can only ever cost the attacker's own entries.
+    """
     for key in [k for k, (_, expires_at) in cache.items() if expires_at <= now]:
         del cache[key]
+
+    if len(cache) >= max_size:
+        for key in [k for k, (author, _) in cache.items() if not author]:
+            del cache[key]
 
     if len(cache) >= max_size:
         for key in list(cache.keys())[: max(1, len(cache) // 2)]:
@@ -163,27 +184,38 @@ LABEL_KIND = 1985
 
 # Features that only ever appear on a wrapper. Used as a backstop when Kind is
 # missing or unrecognised.
+# Deliberately excludes LabelSignerPubkey: it reads $.pubkey and so is populated
+# on EVERY event, which would make every ordinary note look wrapped and stop
+# resolving authors for real content.
 _WRAPPER_MARKERS = (
     'LabelTargetEvent',
     'LabelTargetPubkey',
     'LabelContentHash',
+    'LabelNamespace',
+    'LabelValue',
     'ReportedEventId',
     'ReportedEvent',
     'ReportedPubkey',
+    'ReportReason',
 )
 
 
 def _kind(value: Any) -> Optional[int]:
     """Coerce Kind to an int, or None if it is absent or not a whole number.
 
-    No bool special-case: `isinstance(True, int)` is already True and yields 1,
-    which is not a wrapper kind, so a bool falls through to the marker backstop
-    exactly as an unrecognised kind should.
+    No bool special-case: `isinstance(True, int)` is already True and a bool
+    compares equal to 1, which is not a wrapper kind, so it falls through to the
+    marker backstop exactly as an unrecognised kind should.
     """
     if isinstance(value, int):
         return value
-    if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
+    if isinstance(value, str):
+        candidate = value.strip()
+        # isascii() as well as isdecimal(): str.isdigit() is True for '²' and
+        # friends, which int() then rejects with ValueError, and that raise
+        # escaped into COOPSink above its own try block.
+        if candidate.isascii() and candidate.isdecimal():
+            return int(candidate)
     return None
 
 
@@ -239,3 +271,31 @@ _CACHE: Dict[str, Tuple[str, float]] = {}
 
 def shared_cache() -> Dict[str, Tuple[str, float]]:
     return _CACHE
+
+
+def content_id_for_features(features: Any) -> Optional[str]:
+    """Return the id of the content being moderated, or None if there is none.
+
+    Reports and labels wrap a target event, and it is the target that should be
+    keyed on, not the wrapper. Keyed on `Kind` for the same reason as
+    `author_for_features`, and crucially **so the two stay in step**: the author
+    returned there is the author *of* the id returned here. Resolving them by
+    different means allowed a crafted action to produce a contentId and a userId
+    describing two different events.
+    """
+    if not isinstance(features, dict):
+        return None
+
+    kind = _kind(features.get('Kind'))
+
+    if kind == LABEL_KIND:
+        target = features.get('LabelTargetEvent')
+    elif kind == REPORT_KIND:
+        target = features.get('ReportedEventId')
+    else:
+        target = None
+
+    for value in (target, features.get('EventId')):
+        if value:
+            return str(value)
+    return None
