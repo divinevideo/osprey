@@ -73,8 +73,23 @@ FirstHarassmentReport = Rule(
 # decision must stand, but a CSAM report on already-reviewed content must still reach a
 # human in the CSAM queue rather than being silently dropped. Because this rule declares
 # only flag_for_review and takes no enforcement action, surfacing it re-opens review
-# without undoing the earlier decision. csam_reported still dedups, so a given event
-# surfaces once.
+# without undoing the earlier decision.
+#
+# KNOWN LIMITATION -- csam_reported is a ONE-SHOT, PERMANENT gate. It never expires,
+# nothing removes it, and there is no second-stage rule for csam (contrast
+# ThresholdSexualReport, which fires *because* sexual_reported exists). So after the
+# first csam report on an event, this rule can never fire for that event again, whether
+# or not a human ever actually reviewed it. COOP decisions do not write back into Osprey
+# -- the webhook adapter only calls relay-manager RPC and publishes no kind-1985 labels
+# -- so a moderator dismissing the job clears nothing and records nothing here.
+#
+# The consequence is a denial-of-moderation vector this file's other categories share
+# but which matters far more for csam: one signed kind-1984 permanently consumes an
+# event's only ordinary-reporter CSAM review slot. Dropping the human_reviewed guard does
+# not cause this and does not fix it; csam_reported is the operative gate either way.
+# Resolving it needs one of: an expiry on the label, a second-stage rule keyed on the
+# label, or the COOP-to-Osprey decision feedback path that does not exist yet.
+# Tracked against support-trust-safety#154.
 FirstCSAMReport = Rule(
   when_all=[
     Kind == 1984,
