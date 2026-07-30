@@ -12,12 +12,13 @@ from services.zendesk_sink import ZendeskSink
 from udfs.age_restrict_nostr_event import AgeRestrictNostrEvent
 from udfs.ban_nostr_event import BanNostrEvent
 from udfs.check_moderation_result import CheckModerationResult
+from udfs.is_trusted_moderation_signer import IsTrustedModerationSigner
 from udfs.nostr_account_age import NostrAccountAge
 
 
 @hookimpl_osprey
 def register_udfs() -> Sequence[Type[UDFBase[Any, Any]]]:
-    return [AgeRestrictNostrEvent, BanNostrEvent, NostrAccountAge, CheckModerationResult]
+    return [AgeRestrictNostrEvent, BanNostrEvent, NostrAccountAge, CheckModerationResult, IsTrustedModerationSigner]
 
 
 @hookimpl_osprey

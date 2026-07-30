@@ -28,10 +28,17 @@ Import(
   ]
 )
 
-# Trusted moderation identity (NIP-05: moderation@divine.video).
-# All enforcement rules require the kind 1985 event be signed by this
-# pubkey, not just carry 'source: human-moderator' in metadata.
-TRUSTED_MODERATION_PUBKEY = '8fd5eb6d8f362163bc00a5ab6b4a3167dbf32d00ec4efdbcf43b3c9514433b7e'
+# Trusted moderation identity. All enforcement rules require the kind 1985
+# event be signed by a trusted moderation pubkey, not merely carry
+# 'source: human-moderator' in metadata, which is attacker-controlled.
+#
+# The identity differs per environment, so it is resolved at runtime from
+# DIVINE_TRUSTED_MODERATION_PUBKEYS rather than hardcoded here. Unset, it
+# defaults to production (NIP-05 moderation@divine.video), so production is
+# unchanged. Hardcoding it previously made these rules unexercisable outside
+# production: no label signed by the production key has ever reached the
+# staging relay, so they could never fire there and a staging validation would
+# silently do nothing. See divine/plugins/src/trusted_moderation.py.
 
 # --- Confirmed labels (human verified positive) ---
 
@@ -41,7 +48,7 @@ TRUSTED_MODERATION_PUBKEY = '8fd5eb6d8f362163bc00a5ab6b4a3167dbf32d00ec4efdbcf43
 ConfirmedNudity = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelValue in ['nudity', 'sexual', 'explicit', 'pornography'],
     LabelSource == 'human-moderator',
@@ -71,7 +78,7 @@ WhenRules(
 ConfirmedViolence = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelValue in ['violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
@@ -102,7 +109,7 @@ WhenRules(
 ConfirmedAgeRestrictHashOnlyNullTarget = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
@@ -117,7 +124,7 @@ ConfirmedAgeRestrictHashOnlyNullTarget = Rule(
 ConfirmedAgeRestrictHashOnlyEmptyTarget = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
@@ -140,7 +147,7 @@ WhenRules(
 ConfirmedCSAM = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelValue in ['csam', 'sexual_minors'],
     LabelSource == 'human-moderator',
@@ -171,7 +178,7 @@ WhenRules(
 ConfirmedCSAMHashOnlyNullTarget = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelValue in ['csam', 'sexual_minors'],
     LabelSource == 'human-moderator',
@@ -185,7 +192,7 @@ ConfirmedCSAMHashOnlyNullTarget = Rule(
 ConfirmedCSAMHashOnlyEmptyTarget = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelValue in ['csam', 'sexual_minors'],
     LabelSource == 'human-moderator',
@@ -210,7 +217,7 @@ WhenRules(
 ConfirmedAIGenerated = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelValue in ['ai-generated', 'deepfake'],
     LabelSource == 'human-moderator',
@@ -236,7 +243,7 @@ WhenRules(
 RejectedLabel = Rule(
   when_all=[
     Kind == 1985,
-    LabelSignerPubkey == TRUSTED_MODERATION_PUBKEY,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
     LabelSource == 'human-moderator',
     LabelRejected,
