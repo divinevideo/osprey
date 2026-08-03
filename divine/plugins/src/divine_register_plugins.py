@@ -25,11 +25,9 @@ def register_udfs() -> Sequence[Type[UDFBase[Any, Any]]]:
         BanNostrEvent,
         NostrAccountAge,
         CheckModerationResult,
-    return [
-        ResolveEventAuthor,
         IsTrustedModerationSigner,
         IsValidMediaHash,
-    ]
+        ResolveEventAuthor,
     ]
 
 

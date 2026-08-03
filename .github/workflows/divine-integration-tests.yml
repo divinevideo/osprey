@@ -76,6 +76,34 @@ jobs:
         run: |
           curl -sf "$CH_URL" --data-binary "DESCRIBE TABLE osprey.osprey_events"
 
+      # Every effect that reaches the output sink needs a matching column, or the
+      # sink drops the whole batch and the error is swallowed -- the enforcement
+      # still happens, but the record of it silently disappears. This caught
+      # __age_restrict_nostr_event shipping without its column.
+      - name: Verify every effect feature has a ClickHouse column
+        run: |
+          curl -sf "$CH_URL" --data-binary \
+            "SELECT name FROM system.columns WHERE database='osprey' AND table='osprey_events' FORMAT TSV" > /tmp/columns.tsv
+          python3 - <<'EOF'
+          import pathlib, re, sys
+
+          columns = set(pathlib.Path('/tmp/columns.tsv').read_text().split())
+          missing = []
+          for path in pathlib.Path('divine/plugins/src/udfs').glob('*.py'):
+              src = path.read_text()
+              # CustomExtractedFeature subclasses declare their wire name here.
+              for name in re.findall(r"def feature_name\(cls\)[^:]*:\s*\n\s*return '([^']+)'", src):
+                  if f'__{name}' not in columns:
+                      missing.append(f'{path.name}: {name} -> missing column __{name}')
+
+          if missing:
+              print('Effect features with no ClickHouse column:')
+              for m in missing:
+                  print(f'  {m}')
+              sys.exit(1)
+          print('All effect features have columns.')
+          EOF
+
       - name: Insert test event
         run: |
           curl -sf "$CH_URL" \
