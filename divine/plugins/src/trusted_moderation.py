@@ -27,11 +27,14 @@ This module imports nothing from Osprey so it can be unit tested without the
 engine installed.
 """
 
+import logging
 import os
 from functools import lru_cache
 from typing import FrozenSet, Mapping, Optional
 
 from media_hash import HEX64_RE
+
+logger = logging.getLogger(__name__)
 
 # NIP-05 moderation@divine.video. Verified against the live well-known 2026-07-30.
 PRODUCTION_MODERATION_PUBKEY = '8fd5eb6d8f362163bc00a5ab6b4a3167dbf32d00ec4efdbcf43b3c9514433b7e'
@@ -47,11 +50,48 @@ def _normalize(value: Optional[str]) -> str:
 
 @lru_cache(maxsize=8)
 def _parse(raw: str) -> FrozenSet[str]:
-    """Parse the raw env value. Cached because this runs on every label event."""
+    """Parse the raw env value. Cached because this runs on every label event.
+
+    The cache also makes the logging below fire once per distinct value rather
+    than once per event, so this is effectively startup-time reporting.
+    """
     if not raw.strip():
+        logger.info(
+            '%s unset, trusting the production moderation identity only', ENV_VAR
+        )
         return frozenset({PRODUCTION_MODERATION_PUBKEY})
-    candidates = (_normalize(entry) for entry in raw.split(','))
-    return frozenset(entry for entry in candidates if HEX64_RE.match(entry))
+
+    entries = [_normalize(entry) for entry in raw.split(',') if _normalize(entry)]
+    accepted = frozenset(entry for entry in entries if HEX64_RE.match(entry))
+    rejected = [entry for entry in entries if not HEX64_RE.match(entry)]
+
+    if rejected:
+        # Values are operator-supplied config, not attacker input, but they are
+        # still truncated: a mistyped entry could be a pasted secret.
+        logger.warning(
+            '%s: dropped %d malformed entr%s (not 64-char hex): %s',
+            ENV_VAR,
+            len(rejected),
+            'y' if len(rejected) == 1 else 'ies',
+            ', '.join(repr(entry[:8]) for entry in rejected),
+        )
+
+    if not accepted:
+        # Fail-closed is the right direction for an enforcement gate -- falling
+        # back to a key the operator did not intend would be worse. But silence
+        # is not: this disables EVERY label-driven rule, including the CSAM ban
+        # path, and the only symptom is that nothing ever happens.
+        logger.error(
+            '%s is set but yielded no valid pubkeys -- ALL label-driven enforcement '
+            'is now disabled, including CSAM. Fix the value or unset it to fall back '
+            'to the production moderation identity.',
+            ENV_VAR,
+        )
+    else:
+        logger.info('%s: trusting %d moderation identit%s',
+                    ENV_VAR, len(accepted), 'y' if len(accepted) == 1 else 'ies')
+
+    return accepted
 
 
 def trusted_moderation_pubkeys(env: Optional[Mapping[str, str]] = None) -> FrozenSet[str]:
