@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `DetectorNsfwEvidence` UInt8 DEFAULT 0,
     `__entity_label_mutations` String DEFAULT '',
     `__ban_nostr_event`    String DEFAULT '',
+    -- Mirrors __ban_nostr_event for the age-restrict effect, so the enforcement
+    -- that actually fired is queryable rather than falling into _extra.
+    `__age_restrict_nostr_event` String DEFAULT '',
 
     -- Catch-all for additional extracted features
     `_extra`       String DEFAULT '{}',
