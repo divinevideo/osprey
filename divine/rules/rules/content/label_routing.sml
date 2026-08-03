@@ -42,6 +42,26 @@ Import(
 
 # --- Confirmed labels (human verified positive) ---
 
+# Age-restriction keys off the MEDIA HASH, not the event.
+#
+# /api/moderate-media takes {sha256, action, reason}; the event id is carried
+# only for logging (services/relay_manager_sink.py::_age_restrict_media). The
+# publishing side sets the imeta `x` tag unconditionally and the `e` tag only
+# when it has one, so hash-present/target-absent is the COMMON shape, not an
+# edge case. Rules therefore split on the hash, and the target only decides
+# whether we can also label the event entity.
+#
+# These enforce rather than queueing a second opinion: the label already IS a
+# human decision (LabelSource == 'human-moderator', signed by a trusted
+# moderation key), and age-restriction is a reversible auth-gate rather than a
+# removal, so a wrong call is correctable. Labels missing the hash cannot be
+# enforced at all and route to review below.
+#
+# `reason` is USER-FACING. relay-manager forwards it to moderation-service,
+# which renders it to the creator as "... was found to {reason}" (see
+# nostr/dm-sender.mjs TEMPLATES.AGE_RESTRICTED). Phrase it to complete that
+# sentence, not as a log line.
+
 # Human confirmed: content contains nudity/sexual material.
 # Map to age restriction (not ban) per North Star policy:
 # consensual non-violent adult content OK if properly labeled/age-gated.
@@ -53,23 +73,60 @@ ConfirmedNudity = Rule(
     LabelValue in ['nudity', 'sexual', 'explicit', 'pornography'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    # Both fields are required for an age-restrict. LabelContentHash is optional,
-    # so a missing value resolves to None and `!= ''` alone would pass (None != '');
-    # pair it with `!= None`. Partial data is routed to review below, not here.
+    # Validity, not mere presence: a malformed hash would otherwise declare a
+    # restriction here that the sink then declines to make (see IsValidMediaHash).
+    IsValidMediaHash(sha256=LabelContentHash),
     LabelTargetEvent != None,
     LabelTargetEvent != '',
-    LabelContentHash != None,
-    LabelContentHash != '',
   ],
-  description='Human confirmed nudity/sexual content (with event target and media hash)',
+  description='Human confirmed nudity/sexual content (media hash and event target)',
 )
 
 WhenRules(
   rules_any=[ConfirmedNudity],
   then=[
-    AgeRestrictNostrEvent(event_id=LabelTargetEvent, sha256=LabelContentHash, reason='Human confirmed nudity'),
+    AgeRestrictNostrEvent(event_id=LabelTargetEvent, sha256=LabelContentHash, reason='contain nudity or sexual content'),
     LabelAdd(entity=LabelTargetEventEntity, label='age_restricted'),
     LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
+    DeclareVerdict(verdict='restrict'),
+  ],
+)
+
+# Same decision, no event target. Enforces identically -- the hash is all the
+# media call needs. Cannot label the event entity, since there is no entity.
+# Two rules because the engine distinguishes a null target from an empty one.
+ConfirmedNudityHashOnlyNullTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    IsValidMediaHash(sha256=LabelContentHash),
+    LabelTargetEvent == None,
+  ],
+  description='Human confirmed nudity/sexual content (hash only, null event target)',
+)
+
+ConfirmedNudityHashOnlyEmptyTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    IsValidMediaHash(sha256=LabelContentHash),
+    LabelTargetEvent == '',
+  ],
+  description='Human confirmed nudity/sexual content (hash only, empty event target)',
+)
+
+WhenRules(
+  rules_any=[ConfirmedNudityHashOnlyNullTarget, ConfirmedNudityHashOnlyEmptyTarget],
+  then=[
+    AgeRestrictNostrEvent(event_id='', sha256=LabelContentHash, reason='contain nudity or sexual content'),
     DeclareVerdict(verdict='restrict'),
   ],
 )
@@ -83,61 +140,127 @@ ConfirmedViolence = Rule(
     LabelValue in ['violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    # See ConfirmedNudity: require both fields with engine-honored None checks.
+    # See ConfirmedNudity: validity, not presence.
+    IsValidMediaHash(sha256=LabelContentHash),
     LabelTargetEvent != None,
     LabelTargetEvent != '',
-    LabelContentHash != None,
-    LabelContentHash != '',
   ],
-  description='Human confirmed violence/gore content (with event target and media hash)',
+  description='Human confirmed violence/gore content (media hash and event target)',
 )
 
 WhenRules(
   rules_any=[ConfirmedViolence],
   then=[
-    AgeRestrictNostrEvent(event_id=LabelTargetEvent, sha256=LabelContentHash, reason='Human confirmed violence'),
+    AgeRestrictNostrEvent(event_id=LabelTargetEvent, sha256=LabelContentHash, reason='contain violent or graphic content'),
     LabelAdd(entity=LabelTargetEventEntity, label='age_restricted'),
     LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
     DeclareVerdict(verdict='restrict'),
   ],
 )
 
-# Human confirmed nudity/violence but the label has no event target (hash only).
-# Can't age-restrict the media automatically without the event, but the content
-# hash is actionable, so route to manual review (mirrors the CSAM hash-only path).
-# Two rules because the engine distinguishes a null target from an empty one.
-ConfirmedAgeRestrictHashOnlyNullTarget = Rule(
+# See ConfirmedNudityHashOnly*: same decision, no event target, enforces the same.
+ConfirmedViolenceHashOnlyNullTarget = Rule(
   when_all=[
     Kind == 1985,
     IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
-    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
+    LabelValue in ['violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    LabelContentHash != None,
-    LabelContentHash != '',
+    IsValidMediaHash(sha256=LabelContentHash),
     LabelTargetEvent == None,
   ],
-  description='Human confirmed nudity/violence (hash only, null event target)',
+  description='Human confirmed violence/gore content (hash only, null event target)',
 )
 
-ConfirmedAgeRestrictHashOnlyEmptyTarget = Rule(
+ConfirmedViolenceHashOnlyEmptyTarget = Rule(
   when_all=[
     Kind == 1985,
     IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
     LabelNamespace == 'content-warning',
-    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
+    LabelValue in ['violence', 'gore', 'graphic-violence'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    LabelContentHash != None,
-    LabelContentHash != '',
+    IsValidMediaHash(sha256=LabelContentHash),
     LabelTargetEvent == '',
   ],
-  description='Human confirmed nudity/violence (hash only, empty event target)',
+  description='Human confirmed violence/gore content (hash only, empty event target)',
 )
 
 WhenRules(
-  rules_any=[ConfirmedAgeRestrictHashOnlyNullTarget, ConfirmedAgeRestrictHashOnlyEmptyTarget],
+  rules_any=[ConfirmedViolenceHashOnlyNullTarget, ConfirmedViolenceHashOnlyEmptyTarget],
+  then=[
+    AgeRestrictNostrEvent(event_id='', sha256=LabelContentHash, reason='contain violent or graphic content'),
+    DeclareVerdict(verdict='restrict'),
+  ],
+)
+
+# Human confirmed nudity/violence, but the label carries no ACTIONABLE media
+# hash -- absent, empty, or malformed. Enforcement is addressed by hash, so
+# there is nothing to act on; route to a human who can locate the media.
+#
+# One condition covers all three cases: IsValidMediaHash treats absent and
+# malformed alike, because neither can be enforced. That matters -- gating
+# enforcement on validity without a matching review path here would leave a
+# malformed hash matching no rule at all, silently dropped, which is exactly
+# the gap this section exists to close.
+
+ConfirmedAgeRestrictNoValidHash = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    not IsValidMediaHash(sha256=LabelContentHash),
+    LabelTargetEvent != None,
+    LabelTargetEvent != '',
+  ],
+  description='Human confirmed nudity/violence, no actionable media hash -- needs a human',
+)
+
+WhenRules(
+  rules_any=[ConfirmedAgeRestrictNoValidHash],
+  then=[
+    LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
+    DeclareVerdict(verdict='flag_for_review'),
+  ],
+)
+
+# Neither an actionable hash nor an event target. Nothing to enforce and no
+# entity to label, but it still gets a verdict rather than vanishing.
+# Two rules because the engine distinguishes a null target from an empty one.
+ConfirmedAgeRestrictNoValidHashNullTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    not IsValidMediaHash(sha256=LabelContentHash),
+    LabelTargetEvent == None,
+  ],
+  description='Human confirmed nudity/violence, no actionable hash, null event target',
+)
+
+ConfirmedAgeRestrictNoValidHashEmptyTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelValue in ['nudity', 'sexual', 'explicit', 'pornography', 'violence', 'gore', 'graphic-violence'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    not IsValidMediaHash(sha256=LabelContentHash),
+    LabelTargetEvent == '',
+  ],
+  description='Human confirmed nudity/violence, no actionable hash, empty event target',
+)
+
+WhenRules(
+  rules_any=[ConfirmedAgeRestrictNoValidHashNullTarget, ConfirmedAgeRestrictNoValidHashEmptyTarget],
   then=[
     DeclareVerdict(verdict='flag_for_review'),
   ],

@@ -2,7 +2,7 @@ import os
 from typing import Any
 
 import requests
-from media_hash import HEX64_RE
+from media_hash import is_valid_media_hash
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
@@ -147,12 +147,20 @@ class RelayManagerSink(BaseOutputSink):
             raise
 
     def _age_restrict_media(self, effect: AgeRestrictEffect) -> None:
-        # The hash originates from a kind 1985 label (bridge-set from the imeta x tag
-        # or metadata sha256) and is not validated upstream. A non-64-hex value is
-        # rejected downstream in the moderate-media path, so a malformed one would just
-        # waste an enforcement call plus retries -- skip it here, matching CheckModerationResult.
-        if not HEX64_RE.match(effect.sha256):
-            logger.warning('Skipping age-restrict, malformed sha256: %s', effect.sha256[:20])
+        # The rules gate enforcement on IsValidMediaHash, so reaching here with a
+        # malformed hash means rule and sink have diverged. That is worth an ERROR
+        # rather than a warning: skipping the call while the rules have already
+        # written `age_restricted` and declared `restrict` leaves Osprey's record
+        # asserting a restriction that never happened. Kept as a backstop because
+        # the enforcement call is the thing that must not fire on bad input.
+        if not is_valid_media_hash(effect.sha256):
+            logger.error(
+                'Skipping age-restrict for event %s: malformed sha256 %r reached the sink, '
+                'which the rules should have routed to review. Osprey now records a '
+                'restriction that was NOT applied.',
+                effect.event_id or '<no target>',
+                effect.sha256[:12],
+            )
             return
         payload: dict[str, Any] = {
             'sha256': effect.sha256,
