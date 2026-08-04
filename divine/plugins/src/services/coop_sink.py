@@ -1,6 +1,7 @@
 import os
 from typing import Any
 
+import gevent
 import requests
 import sentry_sdk
 from osprey.engine.executor.execution_context import ExecutionResult
@@ -35,10 +36,16 @@ class COOPSink(BaseOutputSink):
         submitted without media (fail-open).
     """
 
-    timeout: float = 5.0
+    # Budget for the COOP submission itself.
+    coop_timeout: float = 5.0
     # Short, fail-open bound on the relay media lookup so a slow relay never backs up
     # the sink; on timeout the item is submitted without media.
     media_timeout: float = 3.0
+    # Wall-clock budget for one push(), enforced by MultiOutputSink's gevent.Timeout.
+    # Derived rather than hardcoded because it has to cover both hops: share one budget
+    # between them and a slow relay eats the POST's part, gevent kills the greenlet, and
+    # the item is dropped (max_retries is 0) instead of merely submitted without media.
+    timeout: float = media_timeout + coop_timeout + 1.0
 
     def __init__(self) -> None:
         self._url = os.environ.get('DIVINE_COOP_URL', '')
@@ -138,14 +145,22 @@ class COOPSink(BaseOutputSink):
         # it from the relay. Fail-open: no relay URL, or any fetch failure/timeout, just
         # means the item is submitted without media (never dropped, never blocked).
         if self._relay_ws_url:
+            # Hard bound on the whole lookup, DNS and TLS handshake included, so it can
+            # never reach into the COOP POST's share of the push budget above.
+            media_deadline = gevent.Timeout(self.media_timeout)
             try:
-                media_url, media_thumbnail = fetch_event_media(
-                    self._relay_ws_url, content_id, timeout=self.media_timeout
-                )
+                with media_deadline:
+                    media_url, media_thumbnail = fetch_event_media(
+                        self._relay_ws_url, content_id, timeout=self.media_timeout
+                    )
                 if media_url:
                     content['media_url'] = media_url
                 if media_thumbnail:
                     content['media_thumbnail'] = media_thumbnail
+            except gevent.Timeout as media_timeout_exc:
+                if media_timeout_exc is not media_deadline:
+                    raise  # the sink-level timeout; MultiOutputSink owns it
+                logger.warning('COOP media lookup timed out for %s; submitting without media', content_id)
             except Exception:
                 # Media is best-effort enrichment; never let it block a review submission.
                 logger.exception('COOP media lookup failed for %s; submitting without media', content_id)
@@ -163,7 +178,7 @@ class COOPSink(BaseOutputSink):
                 f'{self._url}/api/v1/content',
                 json=payload,
                 headers=self._headers(),
-                timeout=self.timeout,
+                timeout=self.coop_timeout,
             )
             resp.raise_for_status()
             logger.info(
