@@ -50,6 +50,14 @@ LabelTargetEventEntity: Entity[str] = EntityJson(
   coerce_type=True
 )
 
+# AUTHORITATIVE author of the labelled event, resolved from that event rather
+# than from this label's signer. On a label the signer is our own moderation
+# identity, so anything enforcing on it would target us. '' when it cannot be
+# resolved; consumers must decline to enforce rather than fall back.
+LabelTargetAuthorPubkey: str = ResolveEventAuthor(event_id=LabelTargetEvent)
+
+# CLAIMED target. Written into the label by its signer and not verified against
+# the labelled event. Do not enforce on this; see LabelTargetAuthorPubkey above.
 LabelTargetPubkey: str = JsonData(
   path='$.label_target_pubkey',
   coerce_type=True,

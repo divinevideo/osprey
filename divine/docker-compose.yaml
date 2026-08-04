@@ -206,6 +206,13 @@ services:
       - DIVINE_COOP_URL=
       - DIVINE_COOP_API_KEY=
       - DIVINE_MODERATION_API_URL=https://moderation-api.divine.video
+
+      # Relay HTTP API used to resolve a reported event's true author
+      # (ResolveEventAuthor). Deliberately blank: pointing local dev at
+      # production would send real queries there, and the events a local test
+      # references do not exist there anyway. Set it to exercise resolution:
+      # - DIVINE_RELAY_API_URL=https://relay.divine.video
+      - DIVINE_RELAY_API_URL=
       - OSPREY_RULES_SINK_NUM_WORKERS=1
       - SNOWFLAKE_API_ENDPOINT=http://snowflake-id-worker:8088
       - DD_TRACE_ENABLED=False

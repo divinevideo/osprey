@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `ReportedEventId`      String DEFAULT '',
     `ReportedEvent`        String DEFAULT '',
     `ReportedPubkey`       String DEFAULT '',
+    `ReportedAuthorPubkey` String DEFAULT '',
     `ReportReason`         String DEFAULT '',
 
     -- Kind 1985 label event fields
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `LabelSignerPubkey`    String DEFAULT '',
     `LabelTargetPubkey`    String DEFAULT '',
     `LabelTargetEventEntity` String DEFAULT '',
+    `LabelTargetAuthorPubkey` String DEFAULT '',
 
     -- Video event fields
     `VideoHash`            String DEFAULT '',
@@ -98,6 +100,10 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReportedEvent` String
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelSignerPubkey` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelTargetPubkey` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelTargetEventEntity` String DEFAULT '';
+-- Authoritative authors resolved from the reported/labelled event. Every
+-- extracted feature needs a column here or the sink drops the whole batch.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReportedAuthorPubkey` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelTargetAuthorPubkey` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSexualReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstViolenceReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdSexualReport` UInt8 DEFAULT 0;

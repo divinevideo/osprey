@@ -7,6 +7,7 @@ from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.engine.language_types.verdicts import VerdictEffect
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
+from reported_author import author_for_features, content_id_for_features
 
 logger = get_logger(__name__)
 
@@ -74,26 +75,32 @@ class COOPSink(BaseOutputSink):
             self._submit_content(content_id, best_verdict, result)
 
     def _resolve_content_id(self, features: dict[str, Any]) -> str | None:
-        """Resolve the actual moderated content ID, not the wrapper event.
+        """Resolve the moderated content's id, not the wrapper event's.
 
-        Kind 1984 reports and kind 1985 labels wrap a target event; EventId
-        is the wrapper. COOP should key on the moderated content instead.
-        Returns None if no real event ID is available.
+        Delegates so that it is keyed on Kind exactly as `author_for_features`
+        is, which keeps `contentId` and `userId` describing the same event by
+        construction rather than by two rules that can drift apart.
         """
-        for key in ('LabelTargetEvent', 'ReportedEventId', 'EventId'):
-            value = features.get(key)
-            if value:
-                return str(value)
-        return None
+        return content_id_for_features(features)
 
     def _submit_content(self, content_id: str, verdict: VerdictEffect, result: ExecutionResult) -> None:
         features = result.extracted_features
         wrapper_event_id = features.get('EventId', str(result.action.action_id))
 
+        # Whoever signed the content being moderated. Becomes COOP's `creator`,
+        # which drives reversals (Unban-User / Unsuspend-User), so it must name
+        # the offender and not the reporter or labeler who signed the wrapper.
+        # '' when it cannot be resolved: COOP then carries no creator and the
+        # enforcement adapter refuses loudly instead of acting on a guess.
+        author = author_for_features(features)
+
         content: dict[str, Any] = {
             'event_id': content_id,
             'source_event_id': wrapper_event_id,
-            'pubkey': features.get('Pubkey', ''),
+            # Describes event_id, not source_event_id. The wrapper's own signer
+            # is not carried here; `reported_pubkey` below keeps the reporter's
+            # unverified claim, clearly labelled as a claim.
+            'pubkey': author,
             'kind': features.get('Kind'),
             'created_at': features.get('CreatedAt'),
             'verdict': verdict.verdict,
@@ -113,13 +120,10 @@ class COOPSink(BaseOutputSink):
         if features.get('NoteText'):
             content['text'] = features['NoteText']
 
-        reported_pubkey = features.get('ReportedPubkey')
-        user_id = str(reported_pubkey) if reported_pubkey else features.get('Pubkey', '')
-
         payload: dict[str, Any] = {
             'contentId': content_id,
             'contentType': self._content_type,
-            'userId': user_id,
+            'userId': author,
             'content': content,
             'sync': False,
         }
