@@ -13,14 +13,15 @@ mirrors the proven ``coop-bridge-import.sh`` reference.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from websocket import create_connection  # websocket-client (synchronous)
 
 # One connection + one subscription per fetch, so a fixed subscription id is fine.
 _SUB = 'coop-media'
-# Bound the read loop so a relay that streams unrelated frames (never our EVENT/EOSE) can't
-# wedge the sink: the socket timeout bounds a stalled recv, this bounds a chatty one.
+# Secondary guard on the read loop. The wall-clock deadline in fetch_event_media is what
+# actually bounds it; this just caps how many frames we are willing to parse to get there.
 _MAX_FRAMES = 64
 _DEFAULT_TIMEOUT = 3.0
 
@@ -74,15 +75,23 @@ def fetch_event_media(
 
     Fail-open: returns ``(None, None)`` on empty input, connect/read failure, timeout,
     not-found, or non-http(s) media so the caller submits the item without media. Never raises.
+
+    ``timeout`` is a wall-clock budget for the whole call, not a per-recv one: each read gets
+    only what is left of it, so a relay that keeps sending frames for other subscriptions
+    cannot hold the sink for ``_MAX_FRAMES`` × ``timeout``.
     """
     if not relay_url or not event_id:
         return None, None
+    deadline = time.monotonic() + timeout
     ws = None
     try:
         ws = create_connection(relay_url, timeout=timeout)
-        ws.settimeout(timeout)
         ws.send(json.dumps(['REQ', _SUB, {'ids': [event_id], 'limit': 1}]))
         for _ in range(_MAX_FRAMES):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None, None
+            ws.settimeout(remaining)
             msg = json.loads(ws.recv())
             if not isinstance(msg, list) or len(msg) < 2 or msg[1] != _SUB:
                 continue  # NOTICE / another subscription / junk frame
@@ -99,7 +108,9 @@ def fetch_event_media(
     finally:
         if ws is not None:
             try:
-                ws.close()
+                # Send the close frame but don't wait for the peer's reply: against a stalled
+                # relay websocket-client's default would hold us 3s past the deadline above.
+                ws.close(timeout=0)
             except Exception:
                 pass
     return None, None

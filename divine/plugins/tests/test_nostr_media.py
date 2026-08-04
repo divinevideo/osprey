@@ -6,6 +6,7 @@ with create_connection mocked) are covered here; both must never raise.
 """
 
 import json
+import time
 
 import pytest
 from services import nostr_media
@@ -86,10 +87,12 @@ class _FakeWS:
         self._frames = list(frames or [])
         self._raise = raise_on_recv
         self.closed = False
+        self.close_timeout = None
         self.sent = None
+        self.timeouts = []
 
     def settimeout(self, t):
-        pass
+        self.timeouts.append(t)
 
     def send(self, data):
         self.sent = data
@@ -101,8 +104,9 @@ class _FakeWS:
             raise EOFError('no more frames')
         return self._frames.pop(0)
 
-    def close(self):
+    def close(self, timeout=3):
         self.closed = True
+        self.close_timeout = timeout
 
 
 def _event_frame(tags):
@@ -195,6 +199,9 @@ def test_fetch_empty_inputs(monkeypatch, relay, eid):
 def test_fetch_bounded_when_relay_streams_forever(monkeypatch):
     # a relay that never sends our EVENT/EOSE must not loop forever
     class _Flood:
+        def __init__(self):
+            self.recv_count = 0
+
         def settimeout(self, t):
             pass
 
@@ -202,10 +209,61 @@ def test_fetch_bounded_when_relay_streams_forever(monkeypatch):
             pass
 
         def recv(self):
+            self.recv_count += 1
             return json.dumps(['EVENT', 'other-sub', {'tags': []}])
 
-        def close(self):
+        def close(self, timeout=3):
             pass
 
-    monkeypatch.setattr(nostr_media, 'create_connection', lambda url, timeout=None: _Flood())
+    flood = _Flood()
+    monkeypatch.setattr(nostr_media, 'create_connection', lambda url, timeout=None: flood)
     assert nostr_media.fetch_event_media('wss://relay', 'abc') == (None, None)
+    assert flood.recv_count <= nostr_media._MAX_FRAMES
+
+
+def test_fetch_stops_at_wall_clock_deadline(monkeypatch):
+    # A relay that answers steadily but never with our subscription resets the socket timeout
+    # on every frame, so the frame cap alone would let it hold the sink for _MAX_FRAMES x
+    # timeout. The deadline must cut it off well before the cap is reached.
+    class _Chatty:
+        def __init__(self):
+            self.recv_count = 0
+
+        def settimeout(self, t):
+            pass
+
+        def send(self, d):
+            pass
+
+        def recv(self):
+            self.recv_count += 1
+            time.sleep(0.02)
+            return json.dumps(['NOTICE', 'still here'])
+
+        def close(self, timeout=3):
+            pass
+
+    chatty = _Chatty()
+    monkeypatch.setattr(nostr_media, 'create_connection', lambda url, timeout=None: chatty)
+
+    started = time.monotonic()
+    assert nostr_media.fetch_event_media('wss://relay', 'abc', timeout=0.1) == (None, None)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.5  # would be ~1.3s if only the frame cap applied
+    assert chatty.recv_count < nostr_media._MAX_FRAMES
+
+
+def test_fetch_shrinks_read_timeout_towards_the_deadline(monkeypatch):
+    frames = [json.dumps(['NOTICE', 'hi']), _event_frame([_imeta('url https://m/v.mp4')])]
+    ws = _patch_ws(monkeypatch, _FakeWS(frames))
+    nostr_media.fetch_event_media('wss://relay', 'abc', timeout=2.0)
+    assert len(ws.timeouts) == 2
+    assert all(0 < t <= 2.0 for t in ws.timeouts)
+    assert ws.timeouts[1] < ws.timeouts[0]
+
+
+def test_fetch_does_not_wait_for_the_peers_close_frame(monkeypatch):
+    ws = _patch_ws(monkeypatch, _FakeWS([json.dumps(['EOSE', nostr_media._SUB])]))
+    nostr_media.fetch_event_media('wss://relay', 'abc')
+    assert ws.close_timeout == 0
