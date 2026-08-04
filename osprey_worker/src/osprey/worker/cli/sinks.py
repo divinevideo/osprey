@@ -35,7 +35,7 @@ configure_logging()
 
 from osprey.worker.lib.bulk_label import TaskStatus
 from osprey.worker.lib.config import Config
-from osprey.worker.lib.osprey_engine import bootstrap_engine, bootstrap_engine_with_helpers, get_sources_provider
+from osprey.worker.lib.osprey_engine import bootstrap_engine, bootstrap_engine_with_helpers
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.lib.publisher import PubSubPublisher
 from osprey.worker.lib.singletons import CONFIG, LABELS_PROVIDER
@@ -192,9 +192,7 @@ def _run_rules_worker_process() -> None:
     signal.signal(signal.SIGINT, lambda *args: input_stream.stop())
 
     # Sources and Engine
-    sources_provider = get_sources_provider(rules_path=None, input_stream_ready_signaler=input_stream_ready_signaler)
-
-    engine, udf_helpers = bootstrap_engine_with_helpers(sources_provider=sources_provider)
+    engine, udf_helpers = bootstrap_engine_with_helpers(input_stream_ready_signaler=input_stream_ready_signaler)
 
     # Output Sink
     output_sink = bootstrap_output_sinks(config)

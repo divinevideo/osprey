@@ -16,7 +16,6 @@ from osprey.worker.lib.utils.bigtable import fix_bigtable_client_if_using_emulat
 
 OSPREY_TABLES_TO_COLUMN_FAMILIES: Dict[str, Dict[str, None]] = {
     'stored_execution_result': {'execution_result': None},
-    'audit_log': {'audit_log': None},
 }
 """
 A dict of base osprey BigTable table names (the key) & their respective column families (the value).

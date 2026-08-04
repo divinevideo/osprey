@@ -36,6 +36,7 @@ from osprey.engine.utils.types import add_slots
 from osprey.worker.lib.data_exporters.validation_result_exporter import (
     BaseValidationResultExporter,
     NullValidationResultExporter,
+    get_validation_result_exporter,
 )
 from osprey.worker.lib.sources_config import get_config_registry
 from osprey.worker.lib.utils.input_stream_ready_signaler import InputStreamReadySignaler
@@ -303,6 +304,7 @@ def extract_source_snippet(span: Span) -> str:
 
 def bootstrap_engine_with_helpers(
     sources_provider: Optional[BaseSourcesProvider] = None,
+    input_stream_ready_signaler: Optional[InputStreamReadySignaler] = None,
 ) -> Tuple[OspreyEngine, UDFHelpers]:
     # Avoid circular imports
     from osprey.worker.adaptor.plugin_manager import bootstrap_ast_validators, bootstrap_udfs
@@ -310,18 +312,21 @@ def bootstrap_engine_with_helpers(
     udf_registry, udf_helpers = bootstrap_udfs()
     bootstrap_ast_validators()
 
-    if not sources_provider:
+    if sources_provider is None:
         # Use static rules path if configured, otherwise use etcd
         config = CONFIG.instance()
         rules_path_str = config.get_optional_str('OSPREY_RULES_PATH')
         rules_path = Path(rules_path_str) if rules_path_str else None
-        sources_provider = get_sources_provider(rules_path=rules_path)
+        sources_provider = get_sources_provider(
+            rules_path=rules_path, input_stream_ready_signaler=input_stream_ready_signaler
+        )
 
     return (
         OspreyEngine(
             sources_provider=sources_provider,
             udf_registry=udf_registry,
             should_yield_during_compilation=should_yield_during_compilation(),
+            validation_exporter=get_validation_result_exporter(),
         ),
         udf_helpers,
     )
