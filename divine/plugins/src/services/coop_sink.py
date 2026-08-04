@@ -55,10 +55,11 @@ class COOPSink(BaseOutputSink):
 
         if not self._url:
             logger.info('DIVINE_COOP_URL not set. COOPSink disabled.')
-        elif not self._api_key:
-            logger.warning('DIVINE_COOP_API_KEY not set. COOPSink will fail auth.')
-        if not self._relay_ws_url:
-            logger.info('DIVINE_RELAY_WS_URL not set. COOP items will omit media (no MRT video).')
+        else:
+            if not self._api_key:
+                logger.warning('DIVINE_COOP_API_KEY not set. COOPSink will fail auth.')
+            if not self._relay_ws_url:
+                logger.info('DIVINE_RELAY_WS_URL not set. COOP items will omit media (no MRT video).')
 
     def _headers(self) -> dict[str, str]:
         return {
