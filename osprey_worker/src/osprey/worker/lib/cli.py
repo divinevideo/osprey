@@ -26,7 +26,6 @@ from osprey.worker.lib.sources_publisher import (  # noqa: E402
     validate_and_push,
 )
 from osprey.worker.lib.storage import (  # noqa: E402
-    access_audit_log,  # noqa: E402
     labels,
     stored_execution_result,
 )
@@ -116,7 +115,6 @@ def shell(auto_import: str) -> None:
 
     namespace_overrides = {
         'labels': labels,
-        'access_audit_log': access_audit_log,
         'stored_execution_result': stored_execution_result,
         'EntityT': EntityT,
         # 'Entity': Entity,

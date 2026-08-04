@@ -57,7 +57,6 @@ def create_app() -> Flask:
     from osprey.worker.lib.storage import postgres
     from osprey.worker.ui_api.osprey.lib import auth
 
-    from .lib.audit import audit_request
     from .views import (
         abilities,
         bulk_actions,
@@ -115,7 +114,5 @@ def create_app() -> Flask:
     _register_with_prefix(app, bulk_history.blueprint)
     _register_with_prefix(app, rules_visualizer.blueprint)
     _register_with_prefix(app, bulk_actions.blueprint)
-
-    app.after_request(audit_request)
 
     return app

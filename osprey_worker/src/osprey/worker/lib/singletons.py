@@ -14,7 +14,7 @@ CONFIG: Singleton[Config] = Singleton(Config)
 CONFIG_REGISTRY: Singleton[ConfigRegistry] = Singleton(lambda: get_config_registry().clone())
 
 
-def _init_engine():
+def _init_engine() -> 'OspreyEngine':
     from osprey.worker.lib.osprey_engine import bootstrap_engine
 
     return bootstrap_engine()

@@ -130,7 +130,7 @@ def register_ast_validators() -> None:
 Rules are written in SML, some examples are provided in `example_rules/` with YAML config, the rules are mounted to the worker processes when the containers start via environment variables. ex:
 
 ```bash
-OSPREY_RULES=./example_rules uv run python3.11 osprey_worker/src/osprey/worker/cli/sinks.py run-rules-sink
+OSPREY_RULES_PATH=./example_rules uv run python3.11 osprey_worker/src/osprey/worker/cli/sinks.py run-rules-sink
 ```
 
 [More about rules →](rules.md)

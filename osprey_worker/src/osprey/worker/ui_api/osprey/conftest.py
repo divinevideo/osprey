@@ -12,7 +12,6 @@ patch_all(patch_gevent=False, patch_ddtrace=False)
 import os
 import textwrap
 from typing import TYPE_CHECKING, Iterator
-from unittest.mock import patch
 
 import pytest
 from flask import Flask
@@ -71,9 +70,3 @@ postgres_database_config = test_utils.make_postgres_database_config_fixture()
 
 def pytest_configure(config: 'Config') -> None:
     test_utils.add_use_rules_sources(config)
-
-
-@pytest.fixture(autouse=True, scope='module')
-def mock_audit_log_persist():
-    with patch('osprey.worker.lib.storage.access_audit_log.AccessAuditLog.persist'):
-        yield
