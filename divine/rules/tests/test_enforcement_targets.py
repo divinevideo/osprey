@@ -30,10 +30,12 @@ _RULES_ROOT = Path(__file__).resolve().parent.parent
 _LABELS_YAML = _RULES_ROOT / 'config' / 'labels.yaml'
 
 # Values allowed in `BanNostrEvent(pubkey=...)`.
-#   ''       -- event-level ban only; the account decision goes to a human.
-#   Pubkey   -- the signer of the evaluated event, proven by its signature.
+#   ''                    -- event-level ban only; the account decision goes to a human.
+#   Pubkey                -- the signer of the evaluated event, proven by its signature.
+#   ReportedAuthorPubkey  -- resolved from the reported event itself rather than taken
+#                            from the report, and '' whenever it could not be trusted.
 # Anything else is reporter- or label-supplied and must not reach an account ban.
-_ALLOWED_PUBKEY_ARGS = {"''", '""', 'Pubkey'}
+_ALLOWED_PUBKEY_ARGS = {"''", '""', 'Pubkey', 'ReportedAuthorPubkey'}
 
 # Labels behavioral/repeat_offender.sml escalates on, ending in BanNostrEvent.
 _LADDER_LABELS = {'warned', 'suspended', 'banned'}
@@ -105,14 +107,23 @@ def test_account_bans_only_target_verified_pubkeys():
     )
 
 
-def test_report_driven_rules_never_ban_an_account():
-    """Rules that fire on kind-1984 reports hide the event; a human decides the account."""
+def test_report_driven_rules_never_ban_a_claimed_account():
+    """Rules firing on kind-1984 reports may not ban an account the report merely named.
+
+    Today they all pass '' and leave the account to a human. `ReportedAuthorPubkey` is
+    also permitted: it is resolved from the reported event rather than read out of the
+    report, so it is not a claim. `ReportedPubkey` is a claim, and is what this guards.
+    """
+    allowed = {"''", '""', 'ReportedAuthorPubkey'}
     offenders = [
         f'{_rel(path)}: pubkey={arg}'
         for path, arg, acts_on_reports in _ban_calls()
-        if acts_on_reports and arg not in ("''", '""')
+        if acts_on_reports and arg not in allowed
     ]
-    assert not offenders, f"rules acting on kind-1984 reports must pass pubkey='' to BanNostrEvent; found {offenders}"
+    assert not offenders, (
+        'rules acting on kind-1984 reports must ban either no account or the resolved '
+        f'author, never a pubkey the report claimed; found {offenders}'
+    )
 
 
 def test_escalation_labels_are_not_applied_to_reported_entities():

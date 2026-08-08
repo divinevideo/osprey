@@ -117,16 +117,10 @@ jobs:
           test -f divine/nostr-kafka-bridge/Dockerfile
           echo "Bridge files present"
 
-      # The worker image only ADDs example_rules/, osprey_worker/, osprey_rpc/ and
-      # example_plugins/, so the pytest run behind ./run-tests.sh cannot see divine/.
-      # These are pure-stdlib tests (heavy imports are stubbed), so they run here
-      # directly rather than needing the osprey environment.
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: ".python-version"
-
-      - name: Run Divine unit tests
+      # Same reason as the plugin tests above: divine/ never reaches the test_runner
+      # image. These two directories are pure stdlib (the bridge stubs its heavy
+      # imports), so they need no PYTHONPATH and no osprey environment.
+      - name: Run Divine bridge and rules tests
         run: |
           python -m pip install --quiet --disable-pip-version-check pytest
-          python -m pytest divine/ -q
+          python -m pytest divine/nostr-kafka-bridge divine/rules/tests -q
