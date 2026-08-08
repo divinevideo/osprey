@@ -138,8 +138,9 @@ def test_ban_pubkey_argument_is_always_supplied():
 def test_account_bans_only_target_verified_pubkeys():
     offenders = [f'{_rel(path)}: pubkey={arg}' for path, arg, _ in _ban_calls() if arg not in _ALLOWED_PUBKEY_ARGS]
     assert not offenders, (
-        'BanNostrEvent may only ban the signer of the evaluated event (Pubkey) or no '
-        f"account at all (pubkey=''); found {offenders}"
+        'BanNostrEvent may only ban a pubkey taken from an event record -- the evaluated '
+        "event's author (Pubkey), the reported event's resolved author "
+        f"(ReportedAuthorPubkey), or no account at all (pubkey=''); found {offenders}"
     )
 
 
