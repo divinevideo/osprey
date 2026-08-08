@@ -13,7 +13,7 @@ the `auto_hide` verdict take the account decision to a human via COOP.
 
 Neither permitted value is Schnorr-verified here: the bridge copies `pubkey` off the
 event as the relay delivered it, and resolution of the reported author does not check
-the signature either (see divine/plugins/src/udfs/reported_author.py). They are
+the signature either (see divine/plugins/src/reported_author.py). They are
 relay-attested, not proven. The distinction this file enforces is therefore
 event-record-derived versus reporter-asserted, which is the line that actually holds.
 
@@ -23,7 +23,7 @@ the enforcing gate (`valid_for`); the call sites are checked here too so a widen
 `valid_for` and a new call site each fail on their own.
 
 Parsed from the live .sml files rather than a maintained list, so a new rule that
-enforces against an unverified value fails here instead of shipping.
+enforces against a reporter-asserted value fails here instead of shipping.
 
 Pure stdlib: no osprey engine, no plugins, no network.
 Run: `python3 -m pytest divine/rules/tests/`
@@ -37,7 +37,7 @@ _LABELS_YAML = _RULES_ROOT / 'config' / 'labels.yaml'
 
 # Values allowed in `BanNostrEvent(pubkey=...)`.
 #   ''                    -- event-level ban only; the account decision goes to a human.
-#   Pubkey                -- the signer of the evaluated event, proven by its signature.
+#   Pubkey                -- the author recorded on the evaluated event itself.
 #   ReportedAuthorPubkey  -- resolved from the reported event itself rather than taken
 #                            from the report, and '' whenever it could not be trusted.
 # Anything else is reporter- or label-supplied and must not reach an account ban.
@@ -135,7 +135,7 @@ def test_ban_pubkey_argument_is_always_supplied():
     assert not missing, f'BanNostrEvent called without an explicit pubkey argument in: {missing}'
 
 
-def test_account_bans_only_target_verified_pubkeys():
+def test_account_bans_only_target_event_derived_pubkeys():
     offenders = [f'{_rel(path)}: pubkey={arg}' for path, arg, _ in _ban_calls() if arg not in _ALLOWED_PUBKEY_ARGS]
     assert not offenders, (
         'BanNostrEvent may only ban a pubkey taken from an event record -- the evaluated '
@@ -170,9 +170,7 @@ def test_escalation_labels_are_not_applied_to_reported_entities():
         for path, entity, label in _label_adds()
         if label in _LADDER_LABELS and entity.startswith('Reported')
     ]
-    assert not offenders, (
-        f'escalation-ladder labels may only be applied to an entity the signature proves; found {offenders}'
-    )
+    assert not offenders, f'escalation-ladder labels may only be applied to an event-derived entity; found {offenders}'
 
 
 def test_escalation_labels_are_not_valid_for_reported_entities():
