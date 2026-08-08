@@ -4,17 +4,23 @@
 is the irreversible half: `RelayManagerSink` only issues the `banpubkey` RPC when
 it is non-empty (see divine/plugins/src/services/relay_manager_sink.py).
 
-Only a pubkey the relay has verified may go in that argument. `Pubkey` qualifies:
-it is the signer of the event being evaluated, so the signature proves it. Values
-carried in a kind-1984 report's tags do not qualify -- they are what the reporter
-said, not what the relay checked -- so rules acting on reports pass `pubkey=''`
-and let the `auto_hide` verdict take the account decision to a human via COOP.
+Only a pubkey that comes from an event record may go in that argument -- either the
+evaluated event's own author (`Pubkey`) or the reported event's author resolved from
+that event and bound to the requested id (`ReportedAuthorPubkey`). A value the
+reporter wrote into the report's tags (`ReportedPubkey`) is a claim about someone
+else and must never reach it, so rules acting on reports pass `pubkey=''` and let
+the `auto_hide` verdict take the account decision to a human via COOP.
+
+Neither permitted value is Schnorr-verified here: the bridge copies `pubkey` off the
+event as the relay delivered it, and resolution of the reported author does not check
+the signature either (see divine/plugins/src/udfs/reported_author.py). They are
+relay-attested, not proven. The distinction this file enforces is therefore
+event-record-derived versus reporter-asserted, which is the line that actually holds.
 
 The escalation ladder in behavioral/repeat_offender.sml turns account labels into
-that same ban, so the ladder's labels are held to the same standard: they may only
-be applied to an entity the signature proves. `labels.yaml` is the enforcing gate
-(`valid_for`); the call sites are checked here too so a widened `valid_for` and a
-new call site each fail on their own.
+that same ban, so the ladder's labels are held to the same standard. `labels.yaml` is
+the enforcing gate (`valid_for`); the call sites are checked here too so a widened
+`valid_for` and a new call site each fail on their own.
 
 Parsed from the live .sml files rather than a maintained list, so a new rule that
 enforces against an unverified value fails here instead of shipping.
@@ -40,9 +46,13 @@ _ALLOWED_PUBKEY_ARGS = {"''", '""', 'Pubkey', 'ReportedAuthorPubkey'}
 # Labels behavioral/repeat_offender.sml escalates on, ending in BanNostrEvent.
 _LADDER_LABELS = {'warned', 'suspended', 'banned'}
 
-_BAN_CALL = re.compile(r'BanNostrEvent\s*\((.*?)\)', re.DOTALL)
 _PUBKEY_ARG = re.compile(r'\bpubkey\s*=\s*([^,)]+)')
-_LABEL_ADD = re.compile(r'LabelAdd\s*\(\s*entity\s*=\s*(\w+)\s*,\s*label\s*=\s*\'([^\']+)\'')
+_ENTITY_ARG = re.compile(r'\bentity\s*=\s*(\w+)')
+_LABEL_ARG = re.compile(r'\blabel\s*=\s*\'([^\']+)\'')
+
+# `Kind == 1984` and `Kind in [1984]` are both idiomatic here, so match either rather
+# than one spelling -- a rule that escapes this check is invisible to every test below.
+_REPORT_KIND = re.compile(r'\bKind\b[^\n]*\b1984\b')
 
 
 def _sml_files():
@@ -65,22 +75,46 @@ def _sources():
 
 def _acts_on_reports(text):
     """A file is report-driven if it matches on kind 1984, wherever it lives."""
-    return re.search(r'Kind\s*==\s*1984', text) is not None
+    return _REPORT_KIND.search(text) is not None
+
+
+def _call_args(text, name):
+    """Argument text of each `name(...)` call, tracking nesting so `TimeDelta(days=7)`
+    does not truncate the arguments that follow it. Keyword order is not assumed."""
+    found = []
+    for match in re.finditer(rf'\b{name}\s*\(', text):
+        depth, start = 1, match.end()
+        for index in range(start, len(text)):
+            if text[index] == '(':
+                depth += 1
+            elif text[index] == ')':
+                depth -= 1
+                if depth == 0:
+                    found.append(text[start:index])
+                    break
+        else:
+            raise AssertionError(f'unbalanced {name}( in rules -- parser cannot read this call')
+    return found
 
 
 def _ban_calls():
     """(path, pubkey_argument, acts_on_reports) for every BanNostrEvent call."""
     calls = []
     for path, text in _sources():
-        for args in _BAN_CALL.findall(text):
+        for args in _call_args(text, 'BanNostrEvent'):
             match = _PUBKEY_ARG.search(args)
             calls.append((path, match.group(1).strip() if match else None, _acts_on_reports(text)))
     return calls
 
 
 def _label_adds():
-    """(path, entity, label) for every LabelAdd call."""
-    return [(path, entity, label) for path, text in _sources() for entity, label in _LABEL_ADD.findall(text)]
+    """(path, entity, label) for every LabelAdd call, in whatever keyword order."""
+    adds = []
+    for path, text in _sources():
+        for args in _call_args(text, 'LabelAdd'):
+            entity, label = _ENTITY_ARG.search(args), _LABEL_ARG.search(args)
+            adds.append((path, entity.group(1) if entity else None, label.group(1) if label else None))
+    return adds
 
 
 def test_rules_are_present():
@@ -91,6 +125,8 @@ def test_rules_are_present():
     assert any(acts_on_reports for _, _, acts_on_reports in _ban_calls()), (
         'no report-driven BanNostrEvent found -- kind-1984 detection is out of step with the rules'
     )
+    unread = [f'{_rel(path)}: entity={entity}, label={label}' for path, entity, label in _label_adds() if not label]
+    assert not unread, f'LabelAdd calls whose label could not be read: {unread}'
 
 
 def test_ban_pubkey_argument_is_always_supplied():
