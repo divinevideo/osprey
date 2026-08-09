@@ -128,3 +128,12 @@ jobs:
           test -f divine/nostr-kafka-bridge/requirements.txt
           test -f divine/nostr-kafka-bridge/Dockerfile
           echo "Bridge files present"
+
+      # Same reason as the plugin tests above: divine/ never reaches the test_runner
+      # image. These two directories are pure stdlib (the bridge stubs its heavy
+      # imports), so they need no PYTHONPATH and no osprey environment.
+      # Relies on the Set up Python step above; keep this after it.
+      - name: Run Divine bridge and rules tests
+        run: |
+          python -m pip install --quiet --disable-pip-version-check pytest
+          python -m pytest divine/nostr-kafka-bridge divine/rules/tests -q

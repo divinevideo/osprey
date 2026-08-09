@@ -35,10 +35,17 @@ TrustedReporterNSFW = Rule(
   description='Trusted reporter flagged NSFW content',
 )
 
+# Event-level ban only. A reporter-supplied p-tag can name any pubkey, so
+# ReportedPubkey is an unverified claim and is not safe to enforce against --
+# the same reasoning multi_report_threshold.sml states and follows, and the same
+# thing relay-manager's ReportWatcher does (it bans the event and never the
+# author). Banning the event is safe because the event id is content-addressed:
+# naming it is proving it. The author decision goes to a human instead, via the
+# auto_hide verdict landing in COOP's CSAM queue.
 WhenRules(
   rules_any=[TrustedReporterCSAM],
   then=[
-    BanNostrEvent(event_id=ReportedEventId, pubkey=ReportedPubkey, reason='CSAM reported by trusted reporter'),
+    BanNostrEvent(event_id=ReportedEventId, pubkey='', reason='CSAM reported by trusted reporter'),
     DeclareVerdict(verdict='auto_hide'),
   ],
 )
