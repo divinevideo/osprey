@@ -436,6 +436,23 @@ def test_video_event_uses_its_own_author():
     assert author_for_features({'Kind': 34236, 'Pubkey': AUTHOR}) == AUTHOR
 
 
+def test_detector_action_uses_its_computed_content_hash_as_review_id():
+    content_hash = 'a' * 64
+    features = {
+        'ActionName': 'ai_detector_nsfw',
+        'DetectorContentHash': content_hash,
+        'DetectorClass': 'porn',
+    }
+
+    assert content_id_for_features(features) == content_hash
+    assert author_for_features(features) == ''
+
+
+@pytest.mark.parametrize('hostile', HOSTILE_IDS)
+def test_detector_action_rejects_an_invalid_content_hash(hostile):
+    assert content_id_for_features({'DetectorContentHash': hostile}) is None
+
+
 @pytest.mark.parametrize('kind', [1984, '1984'])
 def test_kind_is_coerced_so_a_string_still_counts_as_a_wrapper(kind):
     features = {'Kind': kind, 'Pubkey': WRAPPER_SIGNER, 'ReportedEventId': EVENT_ID}

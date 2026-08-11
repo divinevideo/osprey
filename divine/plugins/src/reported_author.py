@@ -298,4 +298,11 @@ def content_id_for_features(features: Any) -> Optional[str]:
     for value in (target, features.get('EventId')):
         if value:
             return str(value)
+
+    # Direct detector Actions have no Nostr event id yet. Their content hash is
+    # computed from the bytes the detector fetched and is therefore the stable
+    # review identity. Validate it before it can become a COOP contentId.
+    detector_hash = _hex64(features.get('DetectorContentHash'))
+    if detector_hash:
+        return detector_hash
     return None

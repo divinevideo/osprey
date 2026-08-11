@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `VideoUrl`             String DEFAULT '',
     `VideoTitle`           String DEFAULT '',
 
+    -- Self-hosted detector evidence
+    `DetectorContentHash`   String DEFAULT '',
+    `DetectorVideoUrl`      String DEFAULT '',
+    `DetectorSignal`        LowCardinality(String) DEFAULT '',
+    `DetectorClass`         LowCardinality(String) DEFAULT '',
+    `DetectorConfidence`    Float32 DEFAULT 0,
+    `DetectorFramesFlagged` Int32 DEFAULT 0,
+    `DetectorTotalFrames`   Int32 DEFAULT 0,
+    `DetectorModel`         String DEFAULT '',
+    `DetectorDisposition`   LowCardinality(String) DEFAULT '',
+
     -- Rule results (boolean features)
     `NewAccountSpam`       UInt8 DEFAULT 0,
     `RapidPosting`         UInt8 DEFAULT 0,
@@ -72,6 +83,7 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `FirstViolenceReport`  UInt8 DEFAULT 0,
     `ThresholdSexualReport` UInt8 DEFAULT 0,
     `ThresholdViolenceReport` UInt8 DEFAULT 0,
+    `DetectorNsfwEvidence` UInt8 DEFAULT 0,
     `__entity_label_mutations` String DEFAULT '',
     `__ban_nostr_event`    String DEFAULT '',
 
@@ -113,6 +125,18 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceRepo
 -- column). Coupled to divine/rules/rules/reports/first_report_review.sml.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstChildSafetyReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstHarassmentReport` UInt8 DEFAULT 0;
+-- Coupled to models/ai_detector_nsfw.sml and its review-only rule. Every
+-- extracted feature needs a column or ClickHouse rejects the whole batch.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorContentHash` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorVideoUrl` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorSignal` LowCardinality(String) DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorClass` LowCardinality(String) DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorConfidence` Float32 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorFramesFlagged` Int32 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorTotalFrames` Int32 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorModel` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorDisposition` LowCardinality(String) DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorNsfwEvidence` UInt8 DEFAULT 0;
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly
