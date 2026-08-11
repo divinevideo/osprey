@@ -14,3 +14,4 @@ Import(rules=['models/base.sml'])
 
 Require(rule='rules/content/label_routing.sml')
 Require(rule='rules/content/ai_classification.sml')
+Require(rule='rules/content/ai_detector_nsfw.sml')

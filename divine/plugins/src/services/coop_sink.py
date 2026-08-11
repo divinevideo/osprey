@@ -34,6 +34,8 @@ class COOPSink(BaseOutputSink):
         event's media so the MRT can show the video under review
         (e.g. ``wss://relay.staging.divine.video``). Optional; if unset, items are
         submitted without media (fail-open).
+      - ``DIVINE_MEDIA_BASE_URL``: trusted base used to construct media URLs
+        for content-hash detector Actions (default: ``https://media.divine.video``).
     """
 
     # Budget for the COOP submission itself.
@@ -52,6 +54,7 @@ class COOPSink(BaseOutputSink):
         self._api_key = os.environ.get('DIVINE_COOP_API_KEY', '')
         self._content_type = os.environ.get('DIVINE_COOP_CONTENT_TYPE', 'nostr_event')
         self._relay_ws_url = os.environ.get('DIVINE_RELAY_WS_URL', '')
+        self._media_base_url = os.environ.get('DIVINE_MEDIA_BASE_URL', 'https://media.divine.video').rstrip('/')
 
         if not self._url:
             logger.info('DIVINE_COOP_URL not set. COOPSink disabled.')
@@ -140,12 +143,23 @@ class COOPSink(BaseOutputSink):
         if features.get('NoteText'):
             content['text'] = features['NoteText']
 
+        # Detector Actions are keyed on the SHA-256 computed from fetched
+        # bytes, not on a Nostr event id. Build the playable URL from that
+        # validated identity and a trusted base; never pass through the
+        # caller-controlled URL carried for diagnostics in the Action.
+        if result.action.action_name == 'ai_detector_nsfw' and features.get('DetectorContentHash') == content_id:
+            content['media_url'] = f'{self._media_base_url}/{content_id}'
+            content['label_namespace'] = 'content-warning'
+            content['label_value'] = features.get('DetectorClass', 'nsfw')
+            content['confidence'] = features.get('DetectorConfidence', 0)
+            content['model'] = features.get('DetectorModel', '')
+
         # Resolve the reported content's playable media so the MRT can show the video
         # under review. content_id is the moderated event's id, but a report/label event
         # doesn't carry the media (it lives in that event's NIP-92 imeta tag), so fetch
         # it from the relay. Fail-open: no relay URL, or any fetch failure/timeout, just
         # means the item is submitted without media (never dropped, never blocked).
-        if self._relay_ws_url:
+        if self._relay_ws_url and 'media_url' not in content:
             # Hard bound on the whole lookup, DNS and TLS handshake included, so it can
             # never reach into the COOP POST's share of the push budget above.
             media_deadline = gevent.Timeout(self.media_timeout)
