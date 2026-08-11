@@ -6,8 +6,8 @@
 
 Import(
   rules=[
-    'models/base.sml',
     'models/ai_detector_nsfw.sml',
+    'models/base.sml',
   ]
 )
 
