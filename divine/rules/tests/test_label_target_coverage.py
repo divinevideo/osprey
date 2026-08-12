@@ -59,16 +59,32 @@ _EMPTY_TARGET = "LabelTargetEvent == ''"
 def _conditions(body: str) -> list[str]:
     """Condition lines, comments and blanks dropped.
 
-    Comments are dropped because a condition mentioned in prose (`# ... see
-    IsValidMediaHash`) must not read as the condition itself.
+    Whole-line comments are dropped because a condition mentioned in prose
+    (`# ... see IsValidMediaHash`) must not read as the condition itself.
+
+    INLINE comments are stripped rather than dropped. Leaving them attached made
+    the marker matching below an exact-string comparison against a line that a
+    trailing `  # why` silently changed, so annotating a rule removed its family
+    from the check while every test still passed.
     """
     out = []
     for line in body.splitlines():
-        line = line.strip().rstrip(',')
+        line = line.strip()
         if not line or line.startswith('#'):
             continue
-        out.append(line)
+        line = line.split('#', 1)[0].strip().rstrip(',').strip()
+        if line:
+            out.append(line)
     return out
+
+
+def _has(conds: list[str], *fragments: str) -> bool:
+    """True when some condition contains every fragment.
+
+    Fragment matching, not equality: spacing and inline annotation must not
+    decide whether a rule is seen. Equality is what let the marker drift.
+    """
+    return any(all(f in c for f in fragments) for c in conds)
 
 
 def _families() -> dict[tuple[str, str], dict[str, set[str]]]:
@@ -87,14 +103,19 @@ def _families() -> dict[tuple[str, str], dict[str, set[str]]]:
         value = next((c for c in conds if 'LabelValue' in c), '<any value>')
         rejected = next((c for c in conds if 'LabelRejected' in c), '<any rejected>')
         shapes = families.setdefault(
-            (value, rejected), {'requires': set(), 'null': set(), 'empty': set()}
+            (value, rejected), {'requires': set(), 'null': set(), 'empty': set(), 'agnostic': set()}
         )
-        if any(c == _REQUIRES_TARGET for c in conds):
+        touches_target = _has(conds, 'LabelTargetEvent')
+        if _has(conds, 'LabelTargetEvent', '!= None'):
             shapes['requires'].add(name)
-        if any(c == _NULL_TARGET for c in conds):
+        if _has(conds, 'LabelTargetEvent', '== None'):
             shapes['null'].add(name)
-        if any(c == _EMPTY_TARGET for c in conds):
+        if _has(conds, 'LabelTargetEvent', "== ''"):
             shapes['empty'].add(name)
+        if not touches_target:
+            # Constrains no target shape, so it matches all three and the family
+            # cannot fall through on any of them.
+            shapes['agnostic'].add(name)
     return families
 
 
@@ -123,8 +144,21 @@ def test_target_requiring_family_also_covers_targetless_labels(
     family: tuple[str, str], shape: str
 ) -> None:
     shapes = _families()[family]
-    if not shapes['requires']:
-        pytest.skip('family has no target-requiring rule, nothing to fall through')
+    if shapes['agnostic']:
+        pytest.skip(
+            f'family is target-agnostic via {sorted(shapes["agnostic"])}, so every '
+            f'target shape already matches something'
+        )
+    # Deliberately NOT skipped when `requires` is empty. Skipping there made the
+    # check disappear exactly when the marker stopped matching, which is the
+    # failure this file exists to catch: a reviewer demonstrated it by annotating
+    # a rule's `LabelTargetEvent != None,` line and watching two families go quiet.
+    # A family that constrains the target at all must account for all three shapes.
+    assert shapes['requires'] or shapes['null'] or shapes['empty'], (
+        f'Family `{family[0]}` / `{family[1]}` was discovered but no rule in it '
+        f'matched any target-shape marker. Either the spelling in the .sml changed '
+        f'or the matching here did, and in both cases this family is now unchecked.'
+    )
 
     spelling = {'null': _NULL_TARGET, 'empty': _EMPTY_TARGET}[shape]
     value, rejected = family

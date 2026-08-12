@@ -84,12 +84,30 @@ def test_a_normalized_hash_is_still_valid():
     assert is_valid_media_hash(normalize_media_hash(MIXED))
 
 
-@pytest.mark.parametrize('bad', [None, '', 123, [], object()])
-def test_returns_empty_string_for_anything_unusable(bad):
-    """The sink logs the value when it rejects it.
+@pytest.mark.parametrize('wrong_type', [None, 123, 3.5, [], {}, object()])
+def test_returns_empty_string_for_a_non_string(wrong_type):
+    """The bridge fills this field from tag data, so the type is not guaranteed.
 
-    Returning '' rather than passing the input through means that log line, and
-    any caller doing string work on the result, cannot crash on the malformed
-    input it exists to report.
+    Returning '' rather than passing the input through means the sink's rejection
+    log, and any caller doing string work on the result, cannot crash on the
+    malformed input it exists to report.
     """
-    assert normalize_media_hash(bad) == ''
+    assert normalize_media_hash(wrong_type) == ''
+
+
+@pytest.mark.parametrize('malformed', ['garbage', 'NOT-A-HASH', 'a' * 63, 'g' * 64, '  ' + 'a' * 64])
+def test_a_malformed_string_is_lowercased_not_emptied(malformed):
+    """Normalisation is not validation, and conflating them loses information.
+
+    This is the case the previous version of this test missed: it parametrised
+    only non-strings and the empty string, so it could not tell "returns '' for
+    anything unusable" (which the docstring claimed and the code never did) from
+    "lowercases any string" (which is what actually happens).
+
+    The behaviour is deliberate. The effect now carries the normalised value, so
+    emptying a bad hash would destroy the only diagnostic the sink has when it
+    refuses to enforce, and would make an unusable hash indistinguishable from an
+    absent one. Validity is `is_valid_media_hash`'s job, and the sink runs both.
+    """
+    assert normalize_media_hash(malformed) == malformed.lower()
+    assert not is_valid_media_hash(normalize_media_hash(malformed))

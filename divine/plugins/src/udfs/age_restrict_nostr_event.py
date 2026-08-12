@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Self, cast
 
+from media_hash import normalize_media_hash
 from osprey.engine.executor.custom_extracted_features import CustomExtractedFeature
 from osprey.engine.executor.execution_context import ExecutionContext
 from osprey.engine.language_types.effects import EffectBase, EffectToCustomExtractedFeatureBase
@@ -46,9 +47,19 @@ class AgeRestrictEffectsExtractedFeature(CustomExtractedFeature[List[str]]):
 
 
 def synthesize_effect(arguments: AgeRestrictNostrEventArguments) -> AgeRestrictEffect:
+    # Normalise here, at the point the effect is created, rather than only where
+    # it is sent. The effect is recorded as well as acted on: `to_str` feeds the
+    # __age_restrict_nostr_event column, whose purpose is to make the enforcement
+    # that actually fired queryable, and to reconcile Osprey's record against
+    # moderation-service's. Normalising only in the sink left those two disagreeing
+    # for an uppercase label hash: the payload carried dd44..., the column said
+    # DD44..., and the reconciliation the column exists for silently found nothing.
+    #
+    # Doing it once here covers both the call and the record. See media_hash.py for
+    # why the canonical spelling matters downstream.
     return AgeRestrictEffect(
         event_id=arguments.event_id,
-        sha256=arguments.sha256,
+        sha256=normalize_media_hash(arguments.sha256),
         reason=arguments.reason,
     )
 

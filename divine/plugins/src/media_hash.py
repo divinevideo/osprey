@@ -24,7 +24,15 @@ def is_valid_media_hash(value: object) -> bool:
 
 
 def normalize_media_hash(value: object) -> str:
-    """The canonical spelling of `value`, or '' when it is not a usable hash.
+    """The canonical spelling of a hash string, or '' when `value` is not a string.
+
+    Normalisation only, NOT validation. A malformed string is returned lowercased
+    rather than emptied, and callers must still run `is_valid_media_hash`. Two
+    reasons it is split this way. Emptying a bad value would destroy the one
+    diagnostic the sink has when it refuses to enforce, since the effect now
+    carries the normalised value and the error log reports it. And silently
+    turning garbage into '' would make an unusable hash indistinguishable from an
+    absent one at exactly the boundary where that difference matters.
 
     Validation accepts uppercase deliberately: a moderator's decision should not
     turn on the case of a hex string. Enforcement, however, must send one
@@ -38,8 +46,9 @@ def normalize_media_hash(value: object) -> str:
     work exists to remove, so callers normalise at the boundary where the value
     leaves us rather than trusting the far side to cope.
 
-    Returns '' for anything unusable so that a caller reporting a rejected value
-    cannot itself crash on it.
+    Returns '' for a non-string so that a caller reporting a rejected value cannot
+    itself crash on it. The bridge fills this field from tag data, so the type is
+    not guaranteed.
     """
     if not isinstance(value, str):
         return ''

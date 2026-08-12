@@ -299,10 +299,20 @@ WhenRules(
   ],
 )
 
-# Human confirmed CSAM but label has no event target (hash-only).
-# Can't ban an event we don't have an ID for, but the content hash
-# is actionable. Route to manual review so a human can locate and
-# remove the content by hash.
+# Human confirmed CSAM but label has no event target.
+# Can't ban an event we don't have an ID for, so route to manual review and let a
+# human locate the content, by hash where there is one.
+#
+# These deliberately do NOT gate on the hash being non-empty. They used to, and
+# that left a hole: the publisher pushes the `x` tag unconditionally, so a label
+# with an empty sha256 and no event target matched neither this pair nor
+# ConfirmedCSAM (which requires a target), and was dropped in silence. The hash is
+# not used by the outcome here, since this only declares review, so requiring one
+# bought nothing and cost the one family where a silent drop is least acceptable.
+#
+# The `HashOnly` in the names is historical and now slightly wide: they cover any
+# confirmed-CSAM label with no usable event target. Left as-is because renaming a
+# rule orphans its ClickHouse column and adds another.
 ConfirmedCSAMHashOnlyNullTarget = Rule(
   when_all=[
     Kind == 1985,
@@ -311,7 +321,6 @@ ConfirmedCSAMHashOnlyNullTarget = Rule(
     LabelValue in ['csam', 'sexual_minors'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    LabelContentHash != '',
     LabelTargetEvent == None,
   ],
   description='Human confirmed CSAM (hash only, null event target)',
@@ -325,7 +334,6 @@ ConfirmedCSAMHashOnlyEmptyTarget = Rule(
     LabelValue in ['csam', 'sexual_minors'],
     LabelSource == 'human-moderator',
     not LabelRejected,
-    LabelContentHash != '',
     LabelTargetEvent == '',
   ],
   description='Human confirmed CSAM (hash only, empty event target)',
