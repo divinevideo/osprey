@@ -2,7 +2,7 @@ import os
 from typing import Any
 
 import requests
-from media_hash import is_valid_media_hash
+from media_hash import is_valid_media_hash, normalize_media_hash
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
@@ -147,23 +147,40 @@ class RelayManagerSink(BaseOutputSink):
             raise
 
     def _age_restrict_media(self, effect: AgeRestrictEffect) -> None:
-        # The rules gate enforcement on IsValidMediaHash, so reaching here with a
-        # malformed hash means rule and sink have diverged. That is worth an ERROR
-        # rather than a warning: skipping the call while the rules have already
-        # written `age_restricted` and declared `restrict` leaves Osprey's record
-        # asserting a restriction that never happened. Kept as a backstop because
-        # the enforcement call is the thing that must not fire on bad input.
-        if not is_valid_media_hash(effect.sha256):
+        # Normalise before validating and before sending. Validation accepts
+        # uppercase on purpose, since case must not decide whether a moderator's
+        # decision is enforced, but relay-manager forwards the value to
+        # moderation-service, which stores it as sent and compares it
+        # case-sensitively. An uppercase hash therefore opens a SECOND row for the
+        # same media instead of updating the first, skipping the relay
+        # notification and missing the dashboard and creator-DM lookups. See
+        # media_hash.py.
+        #
+        # The rules gate enforcement on IsValidMediaHash, so reaching the check
+        # below with a malformed hash means rule and sink have diverged. That is
+        # worth an ERROR rather than a warning: skipping the call while the rules
+        # have already written `age_restricted` and declared `restrict` leaves
+        # Osprey's record asserting a restriction that never happened. Kept as a
+        # backstop because the enforcement call is the thing that must not fire on
+        # bad input.
+        sha256 = normalize_media_hash(effect.sha256)
+        if not is_valid_media_hash(sha256):
             logger.error(
-                'Skipping age-restrict for event %s: malformed sha256 %r reached the sink, '
+                'Skipping age-restrict for event %s: malformed sha256 %s reached the sink, '
                 'which the rules should have routed to review. Osprey now records a '
                 'restriction that was NOT applied.',
                 effect.event_id or '<no target>',
-                effect.sha256[:12],
+                # repr, bounded: the raw value is what a reader needs in order to
+                # diagnose this, but it arrives from a third-party label and may
+                # be None, non-string, or long. repr never raises and escapes
+                # control characters; the slice bounds it. Slicing the raw value
+                # directly is what made this line crash on exactly the input it
+                # exists to report.
+                repr(effect.sha256)[:64],
             )
             return
         payload: dict[str, Any] = {
-            'sha256': effect.sha256,
+            'sha256': sha256,
             'action': 'AGE_RESTRICTED',
             'reason': effect.reason,
         }
@@ -175,9 +192,12 @@ class RelayManagerSink(BaseOutputSink):
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            logger.info('Age-restricted media %s for event %s', effect.sha256, effect.event_id)
+            # Log what was SENT, not what arrived: these lines are how an operator
+            # reconciles Osprey against moderation-service's records, and the
+            # normalised value is the one that exists on the far side.
+            logger.info('Age-restricted media %s for event %s', sha256, effect.event_id)
         except Exception:
-            logger.exception('Failed to age-restrict media %s for event %s', effect.sha256, effect.event_id)
+            logger.exception('Failed to age-restrict media %s for event %s', sha256, effect.event_id)
             raise
 
     def stop(self) -> None:
