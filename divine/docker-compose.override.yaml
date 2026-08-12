@@ -1,6 +1,10 @@
 # Local ARM Mac override — builds worker/coordinator/UI as linux/amd64
 # since grpcio-tools 1.49.1 has no ARM wheels.
 # This file is auto-loaded by `docker compose up` in the divine/ directory.
+#
+# NOTE: this worktree adds local harness wiring below (local-stubs service and
+# worker env). Not for commit. See
+# support-trust-safety/docs/moderation/local-validation-harness.md
 
 services:
   osprey-coordinator:
@@ -8,9 +12,63 @@ services:
 
   osprey-worker:
     platform: linux/amd64
+    environment:
+      # REAL funnelcake API (staging commit fa77cde, built locally). Port 3000,
+      # not 3333: the local port map was standardised on 3000 on 2026-08-11 to
+      # match divine-blossom's funnelcake_api backend.
+      DIVINE_RELAY_API_URL: "http://host.docker.internal:3000"
+      # REAL relay-manager (wrangler dev on the host). Nothing in the chain is
+      # stubbed any more: funnelcake, relay-manager, moderation-service, Blossom
+      # and Keycast all run for real.
+      DIVINE_RELAY_MANAGER_URL: "http://host.docker.internal:8787"
+      DIVINE_RELAY_MANAGER_API_KEY: "local-dev-key"
+      # Real local Coop (server runs on the host, so reach it via the gateway).
+      DIVINE_COOP_URL: "http://host.docker.internal:8080"
+      DIVINE_COOP_API_KEY: "5478a46a86eb4587334913f2f0d0b66601be9133b2b5054fb4f4f45936027e88"
+      # Throwaway identity so label-routing rules are exercisable locally.
+      DIVINE_TRUSTED_MODERATION_PUBKEYS: "462a8126c428b8621e630ff0fe8fa8b1ef5fc9514d3d28ab0582697c01becba1"
+      # Added by osprey#23 (2026-08-11) and NOT added to divine/docker-compose.yaml,
+      # so it silently defaults to https://media.divine.video. Point it at local
+      # Blossom: a COOP item built from a detector finding would otherwise carry a
+      # production media URL into a local review queue.
+      DIVINE_MEDIA_BASE_URL: "http://host.docker.internal:7676"
+      # REQUIRED locally since #21. get_validation_result_exporter() builds a
+      # PubSubPublisher eagerly at engine bootstrap, and the Google client
+      # resolves credentials in its constructor. There is no ADC in a local
+      # container, so without this the worker dies on boot with
+      # DefaultCredentialsError. On GKE it survives only because the node
+      # service account happens to satisfy ADC.
+      OSPREY_DISABLE_VALIDATION_EXPORTER: "true"
 
   osprey-ui-api:
     platform: linux/amd64
 
   osprey-ui:
     platform: linux/amd64
+
+  # Coop's local stack wants 5432/8123/9000 on the host and its .env.local is
+  # checked in, so move Divine's host bindings instead. Nothing here depends on
+  # them: osprey reaches these over the compose network, and the harness uses
+  # `docker exec`.
+  # `!override` is required: compose APPENDS list values like ports, so without
+  # it the original bindings stay and the collision persists.
+  postgres:
+    ports: !override
+      - "127.0.0.1:55432:5432"
+
+  clickhouse:
+    ports: !override
+      - "127.0.0.1:18123:8123"
+      - "127.0.0.1:19000:9000"
+
+  local-stubs:
+    image: python:3.11-alpine
+    container_name: divine-local-stubs
+    hostname: local-stubs
+    command: ["python", "/srv/stub.py"]
+    volumes:
+      - ./local-stubs:/srv:ro
+    environment:
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:8090:8080"
