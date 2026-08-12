@@ -2,19 +2,22 @@ import os
 from typing import Any
 
 import requests
+from media_hash import is_valid_media_hash, normalize_media_hash
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
+from udfs.age_restrict_nostr_event import AgeRestrictEffect
 from udfs.ban_nostr_event import BanEventEffect
 
 logger = get_logger(__name__)
 
 
 class RelayManagerSink(BaseOutputSink):
-    """Output sink that sends ban actions to Divine's relay-manager NIP-86 endpoint.
+    """Output sink that sends moderation actions to Divine's relay-manager.
 
-    Supports both ``banevent`` (content removal) and ``banpubkey`` (user ban)
-    via the ``/api/relay-rpc`` JSON-RPC endpoint.
+    Supports ``banevent`` (content removal) and ``banpubkey`` (user ban) via the
+    ``/api/relay-rpc`` JSON-RPC endpoint, and ``AGE_RESTRICTED`` via
+    ``/api/moderate-media``.
 
     Configuration (environment variables):
       - ``DIVINE_RELAY_MANAGER_URL``: Required. Base URL of the relay-manager
@@ -43,11 +46,13 @@ class RelayManagerSink(BaseOutputSink):
     def will_do_work(self, result: ExecutionResult) -> bool:
         if not self._url:
             return False
-        return len(result.effects.get(BanEventEffect, [])) > 0
+        has_bans = len(result.effects.get(BanEventEffect, [])) > 0
+        has_restricts = len(result.effects.get(AgeRestrictEffect, [])) > 0
+        return has_bans or has_restricts
 
     def push(self, result: ExecutionResult) -> None:
-        effects: list[BanEventEffect] = result.effects.get(BanEventEffect, [])
-        for effect in effects:
+        ban_effects: list[BanEventEffect] = result.effects.get(BanEventEffect, [])
+        for effect in ban_effects:
             assert isinstance(effect, BanEventEffect)
             self._ban_event(effect)
 
@@ -67,6 +72,11 @@ class RelayManagerSink(BaseOutputSink):
                     effect.event_id,
                 )
                 raise
+
+        restrict_effects: list[AgeRestrictEffect] = result.effects.get(AgeRestrictEffect, [])
+        for effect in restrict_effects:
+            assert isinstance(effect, AgeRestrictEffect)
+            self._age_restrict_media(effect)
 
     def _ban_event(self, effect: BanEventEffect) -> None:
         payload: dict[str, Any] = {
@@ -134,6 +144,60 @@ class RelayManagerSink(BaseOutputSink):
             logger.info('Published enforcement label for event %s', effect.event_id)
         except Exception:
             logger.exception('Failed to publish enforcement label for event %s', effect.event_id)
+            raise
+
+    def _age_restrict_media(self, effect: AgeRestrictEffect) -> None:
+        # Normalise before validating and before sending. Validation accepts
+        # uppercase on purpose, since case must not decide whether a moderator's
+        # decision is enforced, but relay-manager forwards the value to
+        # moderation-service, which stores it as sent and compares it
+        # case-sensitively. An uppercase hash therefore opens a SECOND row for the
+        # same media instead of updating the first, skipping the relay
+        # notification and missing the dashboard and creator-DM lookups. See
+        # media_hash.py.
+        #
+        # The rules gate enforcement on IsValidMediaHash, so reaching the check
+        # below with a malformed hash means rule and sink have diverged. That is
+        # worth an ERROR rather than a warning: skipping the call while the rules
+        # have already written `age_restricted` and declared `restrict` leaves
+        # Osprey's record asserting a restriction that never happened. Kept as a
+        # backstop because the enforcement call is the thing that must not fire on
+        # bad input.
+        sha256 = normalize_media_hash(effect.sha256)
+        if not is_valid_media_hash(sha256):
+            logger.error(
+                'Skipping age-restrict for event %s: malformed sha256 %s reached the sink, '
+                'which the rules should have routed to review. Osprey now records a '
+                'restriction that was NOT applied.',
+                effect.event_id or '<no target>',
+                # repr, bounded: the raw value is what a reader needs in order to
+                # diagnose this, but it arrives from a third-party label and may
+                # be None, non-string, or long. repr never raises and escapes
+                # control characters; the slice bounds it. Slicing the raw value
+                # directly is what made this line crash on exactly the input it
+                # exists to report.
+                repr(effect.sha256)[:64],
+            )
+            return
+        payload: dict[str, Any] = {
+            'sha256': sha256,
+            'action': 'AGE_RESTRICTED',
+            'reason': effect.reason,
+        }
+        try:
+            resp = requests.post(
+                f'{self._url}/api/moderate-media',
+                json=payload,
+                headers=self._headers(),
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            # Log what was SENT, not what arrived: these lines are how an operator
+            # reconciles Osprey against moderation-service's records, and the
+            # normalised value is the one that exists on the far side.
+            logger.info('Age-restricted media %s for event %s', sha256, effect.event_id)
+        except Exception:
+            logger.exception('Failed to age-restrict media %s for event %s', sha256, effect.event_id)
             raise
 
     def stop(self) -> None:

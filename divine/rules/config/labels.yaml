@@ -63,6 +63,18 @@ labels:
 
   # --- Multi-report threshold tracking ---
 
+  reporter_counted:
+    valid_for: [EventReporter]
+    connotation: neutral
+    description: >-
+      This specific (reported event, report category, reporter) triple has
+      already been counted toward a multi-report threshold. Makes each
+      reporter's contribution idempotent so one reporter cannot satisfy the
+      threshold alone. The category belongs in the key: one label guards every
+      category's rules at once, so a key without it lets a reporter's first
+      report silently swallow their later report of the same event under a
+      different category.
+
   sexual_reported:
     valid_for: [EventId, ReportedEventId]
     connotation: negative
@@ -113,6 +125,11 @@ labels:
   # --- Human review ---
 
   human_reviewed:
-    valid_for: [EventId, ReportedEventId, Pubkey]
+    valid_for: [EventId, ReportedEventId, Pubkey, MediaHash]
     connotation: neutral
-    description: A human moderator has reviewed this content or account. Human decisions override automated ones.
+    description: >-
+      A human moderator has reviewed this content or account. Human decisions
+      override automated ones. MediaHash is here because a label often names the
+      media and no event, and a decision on that shape has nowhere else to be
+      recorded: written to the empty event entity it would be lost, and the
+      automated rules would re-decide content a human had already cleared.

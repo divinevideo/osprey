@@ -1,17 +1,15 @@
 import os
-import re
 import time
 from typing import Dict, Tuple
 
 import requests
+from media_hash import HEX64_RE, normalize_media_hash
 from osprey.engine.executor.execution_context import ExecutionContext
 from osprey.engine.udf.arguments import ArgumentsBase
 from osprey.engine.udf.base import UDFBase
 from osprey.worker.lib.osprey_shared.logging import get_logger
 
 logger = get_logger(__name__)
-
-_HEX64_RE = re.compile(r'^[0-9a-f]{64}$', re.IGNORECASE)
 
 # In-memory cache: video_hash -> (result_string, expiry_timestamp)
 _cache: Dict[str, Tuple[str, float]] = {}
@@ -45,11 +43,20 @@ class CheckModerationResult(UDFBase[CheckModerationResultArguments, str]):
     _timeout: float = 1.5
 
     def execute(self, execution_context: ExecutionContext, arguments: CheckModerationResultArguments) -> str:
-        video_hash = arguments.video_hash
+        # Normalise before the lookup and before the cache key. HEX64_RE is
+        # case-insensitive, so an uppercase `x` tag validates here and then goes
+        # into the URL path and the cache key as written. moderation-service
+        # compares case-sensitively, so that spelling misses, this returns
+        # 'unknown', and ai_classification.sml reads content that WAS classified
+        # permanent_ban as unclassified. That is an enforcement miss, not just a
+        # telemetry one, and it would also hold two cache entries per media.
+        #
+        # Same reasoning as the age-restrict sink; see media_hash.py.
+        video_hash = normalize_media_hash(arguments.video_hash)
         if not video_hash:
             return 'unknown'
 
-        if not _HEX64_RE.match(video_hash):
+        if not HEX64_RE.match(video_hash):
             logger.warning(f'Invalid video_hash format: {video_hash[:20]}...')
             return 'unknown'
 

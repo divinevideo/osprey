@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `ReportedPubkey`       String DEFAULT '',
     `ReportedAuthorPubkey` String DEFAULT '',
     `ReportReason`         String DEFAULT '',
+    -- Distinct-reporter dedup. These are plain extracted features rather than
+    -- rule hits, and they need a column for the same reason: an unrecognised
+    -- name makes the sink reject the whole batch. They were in the upgrade DDL
+    -- below but not here, so a database created fresh from this file would have
+    -- failed every insert while an upgraded one worked.
+    `ReporterPubkeyStr`    String DEFAULT '',
+    `EventReporterId`      String DEFAULT '',
 
     -- Kind 1985 label event fields
     `LabelNamespace`       LowCardinality(String) DEFAULT '',
@@ -43,6 +50,10 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `LabelSignerPubkey`    String DEFAULT '',
     `LabelTargetPubkey`    String DEFAULT '',
     `LabelTargetEventEntity` String DEFAULT '',
+    -- Hash-keyed entity shared by the label path and the video path, so a human's
+    -- decision on media with no event target can be recorded and read back.
+    `LabelContentHashEntity` String DEFAULT '',
+    `VideoHashEntity`        String DEFAULT '',
     `LabelTargetAuthorPubkey` String DEFAULT '',
 
     -- Video event fields
@@ -71,14 +82,33 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `TrustedReporterNSFW`  UInt8 DEFAULT 0,
     `FirstChildSafetyReport` UInt8 DEFAULT 0,
     `FirstHarassmentReport`  UInt8 DEFAULT 0,
+    -- Label routing. Each family has three target shapes (target present, null
+    -- target, empty target) and EVERY rule name needs a column here: a rule hit is
+    -- emitted on every action evaluation, not only when the rule matches, because
+    -- a Rule always returns a value and False is a value. So a rule without a
+    -- column does not lose the occasional batch, it fails every insert for as long
+    -- as the branch is deployed, and osprey_events stops recording anything at all.
     `ConfirmedNudity`      UInt8 DEFAULT 0,
+    `ConfirmedNudityHashOnlyNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0,
     `ConfirmedViolence`    UInt8 DEFAULT 0,
+    `ConfirmedViolenceHashOnlyNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedViolenceHashOnlyEmptyTarget` UInt8 DEFAULT 0,
+    `ConfirmedAgeRestrictNoValidHash`            UInt8 DEFAULT 0,
+    `ConfirmedAgeRestrictNoValidHashNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedAgeRestrictNoValidHashEmptyTarget` UInt8 DEFAULT 0,
     `ConfirmedCSAM`        UInt8 DEFAULT 0,
+    `ConfirmedCSAMHashOnlyNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedCSAMHashOnlyEmptyTarget` UInt8 DEFAULT 0,
     `ConfirmedAIGenerated` UInt8 DEFAULT 0,
+    `ConfirmedAIGeneratedNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedAIGeneratedEmptyTarget` UInt8 DEFAULT 0,
     `AgeRestricted`        UInt8 DEFAULT 0,
     `NeedsReview`          UInt8 DEFAULT 0,
     `ModerationServiceBan` UInt8 DEFAULT 0,
     `RejectedLabel`        UInt8 DEFAULT 0,
+    `RejectedLabelNullTarget`  UInt8 DEFAULT 0,
+    `RejectedLabelEmptyTarget` UInt8 DEFAULT 0,
     `FirstSexualReport`    UInt8 DEFAULT 0,
     `FirstViolenceReport`  UInt8 DEFAULT 0,
     `ThresholdSexualReport` UInt8 DEFAULT 0,
@@ -86,6 +116,9 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `DetectorNsfwEvidence` UInt8 DEFAULT 0,
     `__entity_label_mutations` String DEFAULT '',
     `__ban_nostr_event`    String DEFAULT '',
+    -- Mirrors __ban_nostr_event for the age-restrict effect, so the enforcement
+    -- that actually fired is queryable rather than falling into _extra.
+    `__age_restrict_nostr_event` String DEFAULT '',
 
     -- Catch-all for additional extracted features
     `_extra`       String DEFAULT '{}',
@@ -120,6 +153,18 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSexualReport` UI
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstViolenceReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdSexualReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceReport` UInt8 DEFAULT 0;
+-- Hash-only and no-valid-hash label branches. Rule hits are emitted on EVERY
+-- action, not only when the rule matches, so a rule without a column fails
+-- every insert rather than an occasional batch.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHash` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHashNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHashEmptyTarget` UInt8 DEFAULT 0;
 -- New rule columns must be added here AND to the CREATE TABLE list above, or the
 -- ClickHouse output sink fails the whole batch insert (it writes each rule as a
 -- column). Coupled to divine/rules/rules/reports/first_report_review.sml.
@@ -127,6 +172,11 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstChildSafetyRepor
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstHarassmentReport` UInt8 DEFAULT 0;
 -- Coupled to models/ai_detector_nsfw.sml and its review-only rule. Every
 -- extracted feature needs a column or ClickHouse rejects the whole batch.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReporterPubkeyStr` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `EventReporterId` String DEFAULT '';
+-- Hash-keyed entity for human decisions on media with no event target.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelContentHashEntity` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `VideoHashEntity` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorContentHash` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorVideoUrl` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorSignal` LowCardinality(String) DEFAULT '';
@@ -137,6 +187,32 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorTotalFrames` 
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorModel` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorDisposition` LowCardinality(String) DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorNsfwEvidence` UInt8 DEFAULT 0;
+-- Coupled to divine/rules/rules/content/label_routing.sml. Each label family has
+-- three target shapes and every one is a rule, so every one is a column. These
+-- were missing: the hash-only variants shipped without columns, which would have
+-- failed EVERY insert (rule hits are emitted on each evaluation, matched or not)
+-- and silently emptied osprey_events rather than losing an occasional batch.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHash` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHashNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHashEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAIGeneratedNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAIGeneratedEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabelNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabelEmptyTarget` UInt8 DEFAULT 0;
+-- Effect feature columns. CREATE TABLE IF NOT EXISTS is a no-op on every already-
+-- deployed table, so a column that only appears in CREATE never lands on staging
+-- or production. The sink then rejects the whole batch on the first effect
+-- insert (unrecognised column) and empties telemetry — the failure class both
+-- schema halves exist to prevent. Coupled to each effect's feature_name and
+-- ClickHouseOutputSink._PASSTHROUGH_INTERNAL_KEYS.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `__ban_nostr_event` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `__age_restrict_nostr_event` String DEFAULT '';
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly

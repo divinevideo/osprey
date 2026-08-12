@@ -70,6 +70,24 @@ LabelContentHash: str = JsonData(
   required=False
 )
 
+# Entity form of the media hash, for labelling a decision that has no event to
+# attach to.
+#
+# A label carries the `e` tag only when the publisher has an event id, so the
+# ordinary shape names the media and nothing else. Without a hash-keyed entity a
+# moderator's decision on that shape can be recorded nowhere: LabelTargetEventEntity
+# is empty, so `human_reviewed` goes to no entity at all and the automated rules
+# re-decide content a human already settled.
+#
+# Type 'MediaHash' is shared with video_event.sml so the two paths agree: the label
+# writes here and ai_classification.sml reads the same entity off the video event's
+# own hash. The id is normalised for exactly that reason, since either side may
+# arrive uppercased and two spellings would be two entities.
+LabelContentHashEntity: Entity[str] = Entity(
+  type='MediaHash',
+  id=NormalizeMediaHash(sha256=LabelContentHash),
+)
+
 LabelConfidence: float = JsonData(
   path='$.label_confidence',
   coerce_type=True,
