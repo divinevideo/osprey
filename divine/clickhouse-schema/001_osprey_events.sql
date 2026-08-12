@@ -142,6 +142,18 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSexualReport` UI
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstViolenceReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdSexualReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceReport` UInt8 DEFAULT 0;
+-- Hash-only and no-valid-hash label branches. Rule hits are emitted on EVERY
+-- action, not only when the rule matches, so a rule without a column fails
+-- every insert rather than an occasional batch.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHash` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHashNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHashEmptyTarget` UInt8 DEFAULT 0;
 -- New rule columns must be added here AND to the CREATE TABLE list above, or the
 -- ClickHouse output sink fails the whole batch insert (it writes each rule as a
 -- column). Coupled to divine/rules/rules/reports/first_report_review.sml.

@@ -52,6 +52,7 @@ class ClickHouseOutputSink(BaseOutputSink):
             '__verdicts',
             '__entity_label_mutations',
             '__ban_nostr_event',
+            '__age_restrict_nostr_event',
         }
     )
 
