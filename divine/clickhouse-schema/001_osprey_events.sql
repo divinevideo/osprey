@@ -83,11 +83,15 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `FirstChildSafetyReport` UInt8 DEFAULT 0,
     `FirstHarassmentReport`  UInt8 DEFAULT 0,
     -- Label routing. Each family has three target shapes (target present, null
-    -- target, empty target) and EVERY rule name needs a column here: a rule hit is
-    -- emitted on every action evaluation, not only when the rule matches, because
-    -- a Rule always returns a value and False is a value. So a rule without a
-    -- column does not lose the occasional batch, it fails every insert for as long
-    -- as the branch is deployed, and osprey_events stops recording anything at all.
+    -- target, empty target) and EVERY rule name needs a column here.
+    --
+    -- A rule that does not match still emits `false` rather than nothing, so it
+    -- needs a column whether or not it ever fires. Whether it emits `false` or
+    -- `null` depends on the syntactic form of its conditions, and `null` is
+    -- skipped by the sink, so not every rule breaks every insert. But the sink
+    -- unions columns across the whole buffer into ONE insert, so a single action
+    -- carrying an unrecognised name discards every unrelated row batched with it.
+    -- Provision a column for every rule and the distinction never has to be made.
     `ConfirmedNudity`      UInt8 DEFAULT 0,
     `ConfirmedNudityHashOnlyNullTarget`  UInt8 DEFAULT 0,
     `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0,
@@ -153,9 +157,10 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSexualReport` UI
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstViolenceReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdSexualReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceReport` UInt8 DEFAULT 0;
--- Hash-only and no-valid-hash label branches. Rule hits are emitted on EVERY
--- action, not only when the rule matches, so a rule without a column fails
--- every insert rather than an occasional batch.
+-- Hash-only and no-valid-hash label branches. A rule that does not match still
+-- emits `false`, so it needs a column whether or not it ever fires, and one
+-- unrecognised name discards every unrelated row in the same batch, because the
+-- sink unions columns across the buffer into one insert.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyNullTarget` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyNullTarget` UInt8 DEFAULT 0;
@@ -189,9 +194,10 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorDisposition` 
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorNsfwEvidence` UInt8 DEFAULT 0;
 -- Coupled to divine/rules/rules/content/label_routing.sml. Each label family has
 -- three target shapes and every one is a rule, so every one is a column. These
--- were missing: the hash-only variants shipped without columns, which would have
--- failed EVERY insert (rule hits are emitted on each evaluation, matched or not)
--- and silently emptied osprey_events rather than losing an occasional batch.
+-- were missing: the hash-only variants shipped without columns. A rule that does
+-- not match still emits `false`, so it needs a column whether or not it ever
+-- fires, and one unrecognised name discards every unrelated row in the same
+-- batch, because the sink unions columns across the buffer into one insert.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyNullTarget` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyNullTarget` UInt8 DEFAULT 0;
@@ -213,6 +219,27 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabelEmptyTar
 -- ClickHouseOutputSink._PASSTHROUGH_INTERNAL_KEYS.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `__ban_nostr_event` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `__age_restrict_nostr_event` String DEFAULT '';
+
+-- Every rule name belongs in BOTH halves, and the coupling test enforces it.
+-- Which half a column needs used to depend on when it was introduced, and that
+-- judgement is what produced a deployed table 19 columns behind the workers on
+-- 2026-08-12. ADD COLUMN IF NOT EXISTS is a no-op where the column already
+-- exists, so stating every rule here costs nothing and removes the question.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `AgeRestricted` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAIGenerated` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAM` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudity` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolence` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ModerationServiceBan` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `NeedsReview` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `NewAccountSpam` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `PermanentBan` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `PreviouslySuspended` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `PreviouslyWarned` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RapidPosting` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabel` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterCSAM` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterNSFW` UInt8 DEFAULT 0;
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly
