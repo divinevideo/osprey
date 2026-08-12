@@ -27,11 +27,11 @@ RUN_BASE=$(( ($(date +%s) % 100000) * 10 ))
 # row that persists, and a fixed hash would let a PREVIOUS run's row satisfy this
 # run's assertion.
 MEDIA_HASH="dd44$(printf '%060x' "$RUN_BASE")"    # 64 hex, case 1
-# Case 4 gets its OWN hash. Cases 1 and 4 both enforcing on one hash is two
-# entries in a call log but a single upserted row in D1 (sha256 is the primary
-# key), so a shared hash makes "both cases enforced" unobservable in live mode.
-# Distinct hashes also make the assertion stronger: each enforcement is
-# attributed to its case rather than counted anonymously.
+# Case 4 gets its OWN hash, and now needs one more than before. Case 4 must
+# produce NO enforcement while case 1 must produce one, so a shared hash would
+# make the negative assertion unprovable: case 1's own enforcement would satisfy
+# any "was this hash enforced" query and case 4 could never be shown clean.
+# Distinct hashes attribute each enforcement, or its absence, to its own case.
 MEDIA_HASH_4="dd45$(printf '%060x' "$RUN_BASE")"  # 64 hex, case 4
 
 # WHERE THE WORKER ACTUALLY SENDS ENFORCEMENT.
@@ -95,7 +95,10 @@ JSON
 # The common real-world shape: the publisher sets the imeta x tag
 # unconditionally and the e tag only when it has one. This case is why the
 # rules key off the hash rather than the event.
-echo "== case 4: sha256 but NO target event -> expect age-restrict enforcement"
+#
+# It routes to review rather than enforcement, so this is the case that proves a
+# hash-only label is neither dropped nor acted on automatically.
+echo "== case 4: sha256 but NO target event -> expect review, no enforcement"
 cat <<JSON | send
 {"send_time":"$TS","data":{"action_id":$A4,"action_name":"nostr_kind_1985","data":{"event_id":"e4$(printf '0%.0s' {1..61})4","pubkey":"$TESTPUB","kind":1985,"created_at":$((NOW+3)),"content":"","tags":[["L","content-warning"],["l","nudity","content-warning","{\"source\":\"human-moderator\",\"sha256\":\"$MEDIA_HASH_4\"}"]],"sig":"test","label_namespace":"content-warning","label_value":"nudity","label_source":"human-moderator","label_rejected":false,"label_content_hash":"$MEDIA_HASH_4","label_metadata":"{\"source\":\"human-moderator\",\"sha256\":\"$MEDIA_HASH_4\"}"}}}
 JSON
@@ -190,16 +193,22 @@ check() {  # check <label> <condition-result>
 echo
 echo "== assertions"
 
-# case 1: enforced, and the call carries the right hash and action
-c1=$(echo "$CALLS" | python3 -c "
+# Enforcement, per case. Case 1 (hash AND target) must enforce; case 4 (hash, no
+# target) must NOT, since a hash-only label now routes to human review. Reported
+# separately rather than as one combined boolean: a single "both enforced" check
+# cannot distinguish "case 4 wrongly enforced" from "case 1 failed to", and after
+# the review/enforce split those are opposite defects.
+enforcement=$(echo "$CALLS" | python3 -c "
 import json,sys
 calls=json.load(sys.stdin)
 def enforced(h):
     return any(c['path']=='/api/moderate-media'
                and c['body'].get('sha256')==h
                and c['body'].get('action')=='AGE_RESTRICTED' for c in calls)
-print(1 if enforced('$MEDIA_HASH') and enforced('$MEDIA_HASH_4') else 0)")
-check "cases 1 AND 4 each produced an AGE_RESTRICTED enforcement" "$c1"
+print('%d %d' % (enforced('$MEDIA_HASH'), enforced('$MEDIA_HASH_4')))")
+c1=${enforcement% *}
+c4_enforced=${enforcement#* }
+check "case 1 (hash AND target) produced an AGE_RESTRICTED enforcement" "$c1"
 check "case 1 verdict is restrict" \
   "$([ "$(verdict_for $A1)" != "" ] && echo "$(verdict_for $A1)" | grep -q restrict && echo 1 || echo 0)"
 
@@ -221,10 +230,31 @@ check "case 3 (untrusted signer) triggered no enforcement call" \
 check "case 3 produced no enforcement verdict" \
   "$([ -z "$(verdict_for $A3 | grep -E 'restrict|ban')" ] && echo 1 || echo 0)"
 
-# case 4: enforcement without a target event -- the majority shape.
+# case 4: the majority shape -- a valid hash and no target event.
+#
+# This routes to REVIEW, not enforcement, and that is a deliberate posture rather
+# than a limitation. A hash-only label is still a trusted moderator's decision, so
+# enforcing on it was defensible; it was reverted (osprey f785a37) because the
+# enforcing implementation could lift a quarantine a human had placed, and because
+# turning review into automatic enforcement is a policy change that should be
+# argued on its own terms rather than shipped inside a bug fix.
+#
+# Both halves are asserted. A verdict alone would not catch the rule declaring
+# review while the sink enforced anyway, which is the divergence between record
+# and action that this whole harness exists to detect.
 v4=$(verdict_for $A4)
-check "case 4 (hash, no target) verdict is restrict" \
-  "$(echo "$v4" | grep -q restrict && echo 1 || echo 0)"
+check "case 4 (hash, no target) produced a verdict at all (not silently dropped)" \
+  "$([ -n "$v4" ] && echo 1 || echo 0)"
+check "case 4 (hash, no target) verdict is flag_for_review" \
+  "$(echo "$v4" | grep -q flag_for_review && echo 1 || echo 0)"
+check "case 4 declared NO restrict verdict" \
+  "$(echo "$v4" | grep -q restrict && echo 0 || echo 1)"
+# Gated on EVIDENCE_COUNT like every other negative: with an empty call log this
+# would pass while proving nothing, which is the exact failure mode the gate exists
+# for. Here it matters more than elsewhere, because "no enforcement happened" is
+# now the expected result rather than an incidental one.
+check "case 4 triggered no enforcement call" \
+  "$([ "$EVIDENCE_COUNT" -gt 0 ] && [ "$c4_enforced" = "0" ] && echo 1 || echo 0)"
 
 # case 5: malformed hash must produce review AND no enforcement.
 v5=$(verdict_for $A5)
