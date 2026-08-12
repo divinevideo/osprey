@@ -39,6 +39,36 @@ SINK = REPO_ROOT / 'osprey_worker' / 'src' / 'osprey' / 'worker' / 'sinks' / 'si
 # not be allowed to satisfy each other.
 _UPGRADE_MARKER = '-- Upgrade DDL'
 
+
+def schema_halves() -> tuple[str, str]:
+    """CREATE half and upgrade half, or fail if the split is not real.
+
+    `str.split(marker)[0]` on a missing marker returns the whole file, and the
+    CREATE checks below would then pass on ALTER text. That is the one-sided
+    coupling this file exists to close, so the marker and both halves are
+    asserted here rather than assumed.
+    """
+    schema = SCHEMA.read_text()
+    assert _UPGRADE_MARKER in schema, (
+        f'{SCHEMA.name} has no {_UPGRADE_MARKER!r} marker, so the CREATE checks '
+        f'cannot tell the two halves apart and would pass on ALTER text.'
+    )
+    create_half, upgrade_half = schema.split(_UPGRADE_MARKER, 1)
+    assert 'CREATE TABLE' in create_half, (
+        f'The text before {_UPGRADE_MARKER!r} in {SCHEMA.name} is not the CREATE '
+        f'list. The split no longer isolates the obligation it is meant to.'
+    )
+    assert 'ALTER TABLE' in upgrade_half, (
+        f'The text after {_UPGRADE_MARKER!r} in {SCHEMA.name} has no ALTER. The '
+        f'split no longer isolates the upgrade obligation.'
+    )
+    assert 'ALTER TABLE' not in create_half, (
+        f'The CREATE half of {SCHEMA.name} contains ALTER TABLE, so a name that '
+        f'exists only as an upgrade would satisfy the CREATE checks.'
+    )
+    return create_half, upgrade_half
+
+
 # CustomExtractedFeature subclasses declare their wire name in a feature_name
 # classmethod. That name is prefixed with '__' by the execution context.
 FEATURE_NAME_RE = re.compile(r"def feature_name\(cls\)[^:]*:\s*\n\s*return '([^']+)'", re.MULTILINE)
@@ -49,6 +79,13 @@ def effect_feature_names() -> set[str]:
     for path in sorted(UDF_DIR.glob('*.py')):
         names |= set(FEATURE_NAME_RE.findall(path.read_text()))
     return names
+
+
+def test_schema_halves_are_distinct() -> None:
+    """Guard the split the CREATE checks depend on."""
+    create_half, upgrade_half = schema_halves()
+    assert create_half.strip()
+    assert upgrade_half.strip()
 
 
 def test_there_is_at_least_one_effect_feature_to_check() -> None:
@@ -71,9 +108,9 @@ def test_effect_feature_has_a_clickhouse_column(feature: str) -> None:
     # The CREATE half only, for the same reason the rule check splits: a name
     # present solely in the ALTER path would otherwise satisfy this, and a database
     # built fresh from this file would reject the first insert carrying it.
-    schema = SCHEMA.read_text().split(_UPGRADE_MARKER)[0]
+    create_half, _ = schema_halves()
     column = f'__{feature}'
-    assert f'`{column}`' in schema, (
+    assert f'`{column}`' in create_half, (
         f'{column} has no column in {SCHEMA.name}. The sink rejects the whole '
         f'batch on an unrecognised column, so this loses telemetry for every '
         f'action batched with it, not only for {feature}.'
@@ -160,7 +197,7 @@ def test_there_is_at_least_one_rule_to_check() -> None:
 @pytest.mark.parametrize('rule', sorted(rule_names()))
 def test_rule_has_a_clickhouse_column(rule: str) -> None:
     """The CREATE list, so a database built from this file is born correct."""
-    create_half = SCHEMA.read_text().split(_UPGRADE_MARKER)[0]
+    create_half, _ = schema_halves()
     assert f'`{rule}`' in create_half, (
         f'Rule {rule} has no column in the CREATE TABLE list of {SCHEMA.name}. A '
         f'database created fresh from this file would reject every insert carrying '
