@@ -71,14 +71,33 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `TrustedReporterNSFW`  UInt8 DEFAULT 0,
     `FirstChildSafetyReport` UInt8 DEFAULT 0,
     `FirstHarassmentReport`  UInt8 DEFAULT 0,
+    -- Label routing. Each family has three target shapes (target present, null
+    -- target, empty target) and EVERY rule name needs a column here: a rule hit is
+    -- emitted on every action evaluation, not only when the rule matches, because
+    -- a Rule always returns a value and False is a value. So a rule without a
+    -- column does not lose the occasional batch, it fails every insert for as long
+    -- as the branch is deployed, and osprey_events stops recording anything at all.
     `ConfirmedNudity`      UInt8 DEFAULT 0,
+    `ConfirmedNudityHashOnlyNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0,
     `ConfirmedViolence`    UInt8 DEFAULT 0,
+    `ConfirmedViolenceHashOnlyNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedViolenceHashOnlyEmptyTarget` UInt8 DEFAULT 0,
+    `ConfirmedAgeRestrictNoValidHash`            UInt8 DEFAULT 0,
+    `ConfirmedAgeRestrictNoValidHashNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedAgeRestrictNoValidHashEmptyTarget` UInt8 DEFAULT 0,
     `ConfirmedCSAM`        UInt8 DEFAULT 0,
+    `ConfirmedCSAMHashOnlyNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedCSAMHashOnlyEmptyTarget` UInt8 DEFAULT 0,
     `ConfirmedAIGenerated` UInt8 DEFAULT 0,
+    `ConfirmedAIGeneratedNullTarget`  UInt8 DEFAULT 0,
+    `ConfirmedAIGeneratedEmptyTarget` UInt8 DEFAULT 0,
     `AgeRestricted`        UInt8 DEFAULT 0,
     `NeedsReview`          UInt8 DEFAULT 0,
     `ModerationServiceBan` UInt8 DEFAULT 0,
     `RejectedLabel`        UInt8 DEFAULT 0,
+    `RejectedLabelNullTarget`  UInt8 DEFAULT 0,
+    `RejectedLabelEmptyTarget` UInt8 DEFAULT 0,
     `FirstSexualReport`    UInt8 DEFAULT 0,
     `FirstViolenceReport`  UInt8 DEFAULT 0,
     `ThresholdSexualReport` UInt8 DEFAULT 0,
@@ -140,6 +159,24 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorTotalFrames` 
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorModel` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorDisposition` LowCardinality(String) DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorNsfwEvidence` UInt8 DEFAULT 0;
+-- Coupled to divine/rules/rules/content/label_routing.sml. Each label family has
+-- three target shapes and every one is a rule, so every one is a column. These
+-- were missing: the hash-only variants shipped without columns, which would have
+-- failed EVERY insert (rule hits are emitted on each evaluation, matched or not)
+-- and silently emptied osprey_events rather than losing an occasional batch.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHash` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHashNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAgeRestrictNoValidHashEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAMHashOnlyEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAIGeneratedNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAIGeneratedEmptyTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabelNullTarget` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabelEmptyTarget` UInt8 DEFAULT 0;
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly
