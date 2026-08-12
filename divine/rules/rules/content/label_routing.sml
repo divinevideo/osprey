@@ -434,6 +434,11 @@ WhenRules(
   rules_any=[RejectedLabel],
   then=[
     LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
+    # Also the media. ai_classification reads VideoHashEntity (MediaHash), not
+    # ReportedEventId; a target-only write leaves the AI path free to re-decide
+    # the same blob under this or another event id. Same entity the targetless
+    # reject path writes below.
+    LabelAdd(entity=LabelContentHashEntity, label='human_reviewed'),
     DeclareVerdict(verdict='approve'),
   ],
 )
@@ -443,10 +448,9 @@ WhenRules(
 # path publishes exactly this label, and it matched nothing, so the clearance left
 # no trace anywhere in Osprey.
 #
-# The verdict alone does not yet stop automated re-classification. That guard is
-# keyed on `human_reviewed` against the event entity, which a targetless label
-# cannot write, and closing it is a separate change to ai_classification.sml
-# rather than something to fold in here silently.
+# The MediaHash write in the WhenRules below is what stops automated
+# re-classification: ai_classification.sml guards AgeRestricted, NeedsReview,
+# and PermanentBan on human_reviewed against VideoHashEntity.
 RejectedLabelNullTarget = Rule(
   when_all=[
     Kind == 1985,

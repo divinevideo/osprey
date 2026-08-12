@@ -72,11 +72,18 @@ WhenRules(
 )
 
 # Video classified as permanent ban (CSAM, extreme violence, etc.).
-# Auto-enforce without waiting for human review.
+# Auto-enforce on first sight, but never after a human has already decided.
+# Without the human_reviewed guards, a moderator clearing a false-positive
+# permanent_ban classification (usually a targetless rejected label writing
+# human_reviewed on MediaHash) is silently re-banned on the next video
+# evaluation — the clearance story this branch exists for would stop at
+# AgeRestricted/NeedsReview and leave the worst tier unguarded.
 PermanentBan = Rule(
   when_all=[
     Kind in [34235, 34236],
     CheckModerationResult(video_hash=VideoHash) == 'permanent_ban',
+    not HasLabel(entity=EventId, label='human_reviewed'),
+    not HasLabel(entity=VideoHashEntity, label='human_reviewed'),
   ],
   description='AI classified video for permanent ban',
 )
