@@ -205,6 +205,14 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAIGeneratedN
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAIGeneratedEmptyTarget` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabelNullTarget` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabelEmptyTarget` UInt8 DEFAULT 0;
+-- Effect feature columns. CREATE TABLE IF NOT EXISTS is a no-op on every already-
+-- deployed table, so a column that only appears in CREATE never lands on staging
+-- or production. The sink then rejects the whole batch on the first effect
+-- insert (unrecognised column) and empties telemetry — the failure class both
+-- schema halves exist to prevent. Coupled to each effect's feature_name and
+-- ClickHouseOutputSink._PASSTHROUGH_INTERNAL_KEYS.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `__ban_nostr_event` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `__age_restrict_nostr_event` String DEFAULT '';
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)
 CREATE MATERIALIZED VIEW IF NOT EXISTS osprey.rule_hits_hourly

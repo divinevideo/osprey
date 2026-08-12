@@ -71,6 +71,29 @@ def test_effect_feature_has_a_clickhouse_column(feature: str) -> None:
 
 
 @pytest.mark.parametrize('feature', sorted(effect_feature_names()))
+def test_effect_feature_has_an_alter_upgrade_column(feature: str) -> None:
+    """CREATE alone is not enough: existing deployments never re-run CREATE.
+
+    `CREATE TABLE IF NOT EXISTS` is a no-op when osprey_events already exists,
+    which is every non-CI environment. A column that only appears in the CREATE
+    list therefore never lands on an upgraded table. The first insert that
+    carries the effect then fails the whole batch. Assert the ALTER half too.
+    """
+    schema = SCHEMA.read_text()
+    column = f'__{feature}'
+    alter = re.compile(
+        rf'ALTER\s+TABLE\s+osprey\.osprey_events\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+`{re.escape(column)}`',
+        re.IGNORECASE,
+    )
+    assert alter.search(schema), (
+        f'{column} has no ALTER ADD COLUMN IF NOT EXISTS in {SCHEMA.name}. '
+        f'CREATE TABLE IF NOT EXISTS does not upgrade existing tables, so this '
+        f'column is missing everywhere the schema was applied before the effect '
+        f'shipped, and the first {feature} batch empties osprey_events.'
+    )
+
+
+@pytest.mark.parametrize('feature', sorted(effect_feature_names()))
 def test_effect_feature_is_passed_through_by_the_sink(feature: str) -> None:
     sink = SINK.read_text()
     column = f'__{feature}'
