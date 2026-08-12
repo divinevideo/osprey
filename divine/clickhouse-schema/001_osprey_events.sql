@@ -157,9 +157,10 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSexualReport` UI
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstViolenceReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdSexualReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ThresholdViolenceReport` UInt8 DEFAULT 0;
--- Hash-only and no-valid-hash label branches. Rule hits are emitted on EVERY
--- action, not only when the rule matches, so a rule without a column fails
--- every insert rather than an occasional batch.
+-- Hash-only and no-valid-hash label branches. A rule that does not match still
+-- emits `false`, so it needs a column whether or not it ever fires, and one
+-- unrecognised name discards every unrelated row in the same batch, because the
+-- sink unions columns across the buffer into one insert.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyNullTarget` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudityHashOnlyEmptyTarget` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolenceHashOnlyNullTarget` UInt8 DEFAULT 0;
