@@ -110,8 +110,17 @@ def test_the_rejection_log_cannot_crash_on_the_value_it_reports() -> None:
 # raw attribute.
 
 
-def _log_calls_with_raw_event_id() -> list[str]:
-    """Every logger.* call passing `effect.event_id` directly as an argument."""
+# WHAT THIS DOES NOT CATCH, stated so it is not mistaken for total coverage:
+# f-strings (the dominant logging style elsewhere in divine/plugins/src, e.g.
+# zendesk_sink and labels_service), keyword arguments, str() wrapping, an aliased
+# logger, and any attribute other than the two named below. Someone extending this
+# sink in the house style writes logger.info(f'... {effect.event_id}') and this
+# stays green. It is a floor, not a ceiling.
+_RAW_ATTRS = ('event_id', 'pubkey')
+
+
+def _log_calls_with_raw_identifier() -> list[str]:
+    """Every logger.* call passing a raw `effect.<identifier>` as an argument."""
     tree = ast.parse(_SINK.read_text())
     offenders = []
     for node in ast.walk(tree):
@@ -123,11 +132,11 @@ def _log_calls_with_raw_event_id() -> list[str]:
         for arg in node.args:
             if (
                 isinstance(arg, ast.Attribute)
-                and arg.attr == 'event_id'
+                and arg.attr in _RAW_ATTRS
                 and isinstance(arg.value, ast.Name)
                 and arg.value.id == 'effect'
             ):
-                offenders.append(f'{node.func.attr}() at line {node.lineno}')
+                offenders.append(f'{node.func.attr}() at line {node.lineno} passes effect.{arg.attr}')
     return offenders
 
 
@@ -148,12 +157,12 @@ def test_there_are_logger_calls_to_check() -> None:
     )
 
 
-def test_no_log_line_echoes_a_raw_event_id() -> None:
-    offenders = _log_calls_with_raw_event_id()
+def test_no_log_line_echoes_a_raw_identifier() -> None:
+    offenders = _log_calls_with_raw_identifier()
     assert not offenders, (
-        f'These log calls pass effect.event_id raw: {", ".join(offenders)}. It is '
+        f'These log calls pass a raw identifier: {", ".join(offenders)}. It is '
         f'third-party input, unbounded and possibly newline-bearing. Pass it '
-        f'through _loggable_event_id, which returns a well-formed id unchanged and '
+        f'through _loggable_hex64, which returns a well-formed id unchanged and '
         f'escapes and truncates anything else so the malformed value is still '
         f'visible to whoever is debugging.'
     )

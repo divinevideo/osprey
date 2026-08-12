@@ -68,7 +68,10 @@ def test_there_is_at_least_one_effect_feature_to_check() -> None:
 
 @pytest.mark.parametrize('feature', sorted(effect_feature_names()))
 def test_effect_feature_has_a_clickhouse_column(feature: str) -> None:
-    schema = SCHEMA.read_text()
+    # The CREATE half only, for the same reason the rule check splits: a name
+    # present solely in the ALTER path would otherwise satisfy this, and a database
+    # built fresh from this file would reject the first insert carrying it.
+    schema = SCHEMA.read_text().split(_UPGRADE_MARKER)[0]
     column = f'__{feature}'
     assert f'`{column}`' in schema, (
         f'{column} has no column in {SCHEMA.name}. The sink rejects the whole '
