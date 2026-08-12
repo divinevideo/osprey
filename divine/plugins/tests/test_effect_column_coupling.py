@@ -32,6 +32,13 @@ RULES_DIR = REPO_ROOT / 'divine' / 'rules'
 SCHEMA = REPO_ROOT / 'divine' / 'clickhouse-schema' / '001_osprey_events.sql'
 SINK = REPO_ROOT / 'osprey_worker' / 'src' / 'osprey' / 'worker' / 'sinks' / 'sink' / 'clickhouse_output_sink.py'
 
+# Splits the two halves of the schema. The CREATE list governs a database built
+# fresh from this file; everything after governs upgrading one that already
+# exists, which is every deployed environment. They are separate obligations, and
+# a name present in only one of them is a live defect, so the checks below must
+# not be allowed to satisfy each other.
+_UPGRADE_MARKER = '-- Upgrade DDL'
+
 # CustomExtractedFeature subclasses declare their wire name in a feature_name
 # classmethod. That name is prefixed with '__' by the execution context.
 FEATURE_NAME_RE = re.compile(r"def feature_name\(cls\)[^:]*:\s*\n\s*return '([^']+)'", re.MULTILINE)
@@ -107,12 +114,27 @@ def test_effect_feature_is_passed_through_by_the_sink(feature: str) -> None:
 
 
 # --- rule names ------------------------------------------------------------
-# Rule hits are columns too, and they are emitted on EVERY action evaluation
-# rather than only when the rule matches: a Rule always returns a value, and
-# False is a value. So a rule without a column does not lose one batch
-# occasionally, it fails every insert for as long as the branch is deployed.
-# That is how `ConfirmedNudityHashOnlyNullTarget` silently emptied
-# osprey_events while the effect-column check above passed.
+# Rule hits are columns too, and a rule that does not match still emits `false`
+# rather than nothing, so a column is needed whether or not the rule ever fires.
+#
+# An earlier version of this comment said a Rule "always returns a value, and
+# False is a value", and therefore that a missing column fails EVERY insert. That
+# overstates it, and a reviewer reasoned from it to a wrong conclusion, so it is
+# corrected here rather than left to mislead again. What actually decides it is
+# the syntactic form of the conditions: tolerant forms (`==`, `!=`, `in`,
+# Optional-argument UDFs) resolve a missing feature to None and yield `false`,
+# which needs a column; non-tolerant forms (bare `X`, `not X`, numeric
+# comparisons) propagate the node failure and yield `null`, which the sink skips
+# and which needs nothing.
+#
+# The practical consequence is unchanged, which is why the check is unchanged:
+# a rule emitting `false` on ANY action type needs a column unconditionally, and
+# `_flush` unions columns across the whole buffer into one insert, so a single
+# such action destroys every unrelated row batched with it. Provision a column
+# for every rule name and the question never has to be asked.
+#
+# That is how `ConfirmedNudityHashOnlyNullTarget` silently emptied osprey_events
+# while the effect-column check above passed.
 
 RULE_DEF_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*Rule\(', re.MULTILINE)
 
@@ -134,9 +156,33 @@ def test_there_is_at_least_one_rule_to_check() -> None:
 
 @pytest.mark.parametrize('rule', sorted(rule_names()))
 def test_rule_has_a_clickhouse_column(rule: str) -> None:
+    """The CREATE list, so a database built from this file is born correct."""
+    create_half = SCHEMA.read_text().split(_UPGRADE_MARKER)[0]
+    assert f'`{rule}`' in create_half, (
+        f'Rule {rule} has no column in the CREATE TABLE list of {SCHEMA.name}. A '
+        f'database created fresh from this file would reject every insert carrying '
+        f'the rule, which is every action once it is deployed.'
+    )
+
+
+@pytest.mark.parametrize('rule', sorted(rule_names()))
+def test_rule_has_an_alter_upgrade_column(rule: str) -> None:
+    """And the ALTER half, which is the one every deployed environment runs.
+
+    Rules got only a substring check against the whole file, so a name present in
+    EITHER half passed. That is the same one-sided coupling the effect features
+    already guard against above, and it is not hypothetical: on 2026-08-12 staging
+    was found 19 columns behind and discarding batches of 100 rows, because the
+    deployed table is upgraded by ALTER and never by CREATE.
+    """
     schema = SCHEMA.read_text()
-    assert f'`{rule}`' in schema, (
-        f'Rule {rule} has no column in {SCHEMA.name}. Rule hits are emitted on '
-        f'every action, so this fails EVERY insert, not an occasional batch: '
-        f'osprey_events stops recording anything at all.'
+    alter = re.compile(
+        rf'ALTER\s+TABLE\s+osprey\.osprey_events\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+`{re.escape(rule)}`',
+        re.IGNORECASE,
+    )
+    assert alter.search(schema), (
+        f'Rule {rule} has no ALTER ADD COLUMN IF NOT EXISTS in {SCHEMA.name}. '
+        f'CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so this '
+        f'column never lands anywhere the schema was applied before the rule '
+        f'shipped, and osprey_events stops recording there.'
     )

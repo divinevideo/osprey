@@ -42,14 +42,19 @@ This module imports nothing from Osprey so it can be unit tested without the
 engine installed.
 """
 
-import re
 import time
 from typing import Any, Callable, Dict, MutableMapping, Optional, Tuple
 
-# Nostr event ids and pubkeys are both 32 bytes, rendered as 64 hex chars.
-# `check_moderation_result` keeps its own copy of this pattern; if divine#8
-# lands, both should move to the shared `media_hash.HEX64_RE`.
-HEX64_RE = re.compile(r'^[0-9a-f]{64}$', re.IGNORECASE)
+# Nostr event ids and pubkeys are both 32 bytes, rendered as 64 hex chars, which
+# is the same shape as a media sha256, so the pattern is shared rather than
+# copied. It used to be a local `^[0-9a-f]{64}$`, and the two copies did not
+# agree: in Python `$` also matches immediately before a trailing newline, so
+# that form accepts "<64 hex>\n" while the shared `\A...\Z` does not.
+#
+# It was not reachable here, because `_hex64` strips before matching, but a
+# duplicate that differs from its original in exactly the way the original
+# documents avoiding is a trap left for whoever removes the strip.
+from media_hash import HEX64_RE
 
 CACHE_TTL_SECONDS = 300.0
 # Failures are cached far more briefly than successes: long enough to blunt an

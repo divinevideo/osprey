@@ -96,3 +96,64 @@ def test_the_rejection_log_cannot_crash_on_the_value_it_reports() -> None:
         'The raw effect.sha256 is being sliced. It may be None or a non-string, '
         'so this raises inside the error path. Wrap it in repr() before slicing.'
     )
+
+
+# --- log echoes -------------------------------------------------------------
+# An event id reaches this sink from a report's `e` tag or a label's, unvalidated:
+# nothing between the bridge and here checks its shape. Echoed raw into a log it
+# is unbounded and can carry newlines, so a hostile value forges log lines or
+# buries the context around it.
+#
+# Guarded structurally for the same reason as the payload above: the sink cannot
+# be imported under the plugin-test CI step, which installs neither the Osprey
+# engine nor requests. What this can still do is refuse to let a log call take the
+# raw attribute.
+
+
+def _log_calls_with_raw_event_id() -> list[str]:
+    """Every logger.* call passing `effect.event_id` directly as an argument."""
+    tree = ast.parse(_SINK.read_text())
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        target = node.func.value
+        if not (isinstance(target, ast.Name) and target.id == 'logger'):
+            continue
+        for arg in node.args:
+            if (
+                isinstance(arg, ast.Attribute)
+                and arg.attr == 'event_id'
+                and isinstance(arg.value, ast.Name)
+                and arg.value.id == 'effect'
+            ):
+                offenders.append(f'{node.func.attr}() at line {node.lineno}')
+    return offenders
+
+
+def test_there_are_logger_calls_to_check() -> None:
+    """Guard the guard: an empty walk would pass while checking nothing."""
+    tree = ast.parse(_SINK.read_text())
+    logger_calls = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == 'logger'
+    ]
+    assert logger_calls, (
+        f'No logger calls discovered in {_SINK.name}. Either logging moved or the '
+        f'matching here no longer recognises it, and the check below is vacuous.'
+    )
+
+
+def test_no_log_line_echoes_a_raw_event_id() -> None:
+    offenders = _log_calls_with_raw_event_id()
+    assert not offenders, (
+        f'These log calls pass effect.event_id raw: {", ".join(offenders)}. It is '
+        f'third-party input, unbounded and possibly newline-bearing. Pass it '
+        f'through _loggable_event_id, which returns a well-formed id unchanged and '
+        f'escapes and truncates anything else so the malformed value is still '
+        f'visible to whoever is debugging.'
+    )

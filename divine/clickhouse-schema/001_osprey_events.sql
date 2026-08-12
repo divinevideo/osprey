@@ -234,3 +234,24 @@ FROM (
     WHERE hit = true
 )
 GROUP BY hour, rule_name;
+
+-- Every rule name belongs in BOTH halves, and the coupling test enforces it.
+-- Which half a column needs used to depend on when it was introduced, and that
+-- judgement is what produced a deployed table 19 columns behind the workers on
+-- 2026-08-12. ADD COLUMN IF NOT EXISTS is a no-op where the column already
+-- exists, so stating every rule here costs nothing and removes the question.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `AgeRestricted` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedAIGenerated` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedCSAM` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedNudity` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ConfirmedViolence` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ModerationServiceBan` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `NeedsReview` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `NewAccountSpam` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `PermanentBan` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `PreviouslySuspended` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `PreviouslyWarned` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RapidPosting` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabel` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterCSAM` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterNSFW` UInt8 DEFAULT 0;

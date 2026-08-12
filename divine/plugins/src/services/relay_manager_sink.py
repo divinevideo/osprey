@@ -6,10 +6,31 @@ from media_hash import is_valid_media_hash, normalize_media_hash
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
+from reported_author import normalize_event_id
 from udfs.age_restrict_nostr_event import AgeRestrictEffect
 from udfs.ban_nostr_event import BanEventEffect
 
 logger = get_logger(__name__)
+
+
+def _loggable_event_id(value: object) -> str:
+    """An event id safe to put in a log line.
+
+    The id originates in a report's `e` tag or a label's, so it is third-party
+    input and arrives here unvalidated: nothing between the bridge and this sink
+    checks its shape. Echoed raw it is unbounded and can carry newlines, so a
+    hostile value can forge log lines or bury the surrounding context.
+
+    A well-formed id is returned as-is, since that is the overwhelmingly common
+    case and operators match on it. Anything else is escaped and truncated rather
+    than dropped, because the malformed value is exactly what a reader needs when
+    working out why an enforcement looks wrong.
+
+    This makes the LOG safe. It deliberately does not gate the enforcement call
+    itself; see the note in `_ban_event`.
+    """
+    normalized = normalize_event_id(value)
+    return normalized or f'<malformed: {value!r:.64}>'
 
 
 class RelayManagerSink(BaseOutputSink):
@@ -69,7 +90,7 @@ class RelayManagerSink(BaseOutputSink):
             except Exception:
                 logger.error(
                     'Enforcement label failed for %s -- bans succeeded, label lost',
-                    effect.event_id,
+                    _loggable_event_id(effect.event_id),
                 )
                 raise
 
@@ -79,6 +100,15 @@ class RelayManagerSink(BaseOutputSink):
             self._age_restrict_media(effect)
 
     def _ban_event(self, effect: BanEventEffect) -> None:
+        # The id is sent to relay-manager AS GIVEN, deliberately, while the log
+        # lines around it are sanitised.
+        #
+        # Sanitising a log line cannot change what is enforced. Validating here
+        # could: a malformed id would stop being a relay-manager 400 and start
+        # being a silent no-op on our side, which is the failure mode this whole
+        # body of work exists to remove. Whether the sink should refuse to call on
+        # a malformed id is a change in enforcement posture and belongs with the
+        # rules that produce the id, not smuggled in behind a logging fix.
         payload: dict[str, Any] = {
             'method': 'banevent',
             'params': [effect.event_id, effect.reason],
@@ -91,9 +121,9 @@ class RelayManagerSink(BaseOutputSink):
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            logger.info('Banned event %s via relay-manager', effect.event_id)
+            logger.info('Banned event %s via relay-manager', _loggable_event_id(effect.event_id))
         except Exception:
-            logger.exception('Failed to ban event %s via relay-manager', effect.event_id)
+            logger.exception('Failed to ban event %s via relay-manager', _loggable_event_id(effect.event_id))
             raise
 
     def _ban_pubkey(self, effect: BanEventEffect) -> None:
@@ -141,9 +171,9 @@ class RelayManagerSink(BaseOutputSink):
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            logger.info('Published enforcement label for event %s', effect.event_id)
+            logger.info('Published enforcement label for event %s', _loggable_event_id(effect.event_id))
         except Exception:
-            logger.exception('Failed to publish enforcement label for event %s', effect.event_id)
+            logger.exception('Failed to publish enforcement label for event %s', _loggable_event_id(effect.event_id))
             raise
 
     def _age_restrict_media(self, effect: AgeRestrictEffect) -> None:
@@ -169,7 +199,7 @@ class RelayManagerSink(BaseOutputSink):
                 'Skipping age-restrict for event %s: malformed sha256 %s reached the sink, '
                 'which the rules should have routed to review. Osprey now records a '
                 'restriction that was NOT applied.',
-                effect.event_id or '<no target>',
+                _loggable_event_id(effect.event_id) if effect.event_id else '<no target>',
                 # repr, bounded: the raw value is what a reader needs in order to
                 # diagnose this, but it arrives from a third-party label and may
                 # be None, non-string, or long. repr never raises and escapes
@@ -195,9 +225,11 @@ class RelayManagerSink(BaseOutputSink):
             # Log what was SENT, not what arrived: these lines are how an operator
             # reconciles Osprey against moderation-service's records, and the
             # normalised value is the one that exists on the far side.
-            logger.info('Age-restricted media %s for event %s', sha256, effect.event_id)
+            logger.info('Age-restricted media %s for event %s', sha256, _loggable_event_id(effect.event_id))
         except Exception:
-            logger.exception('Failed to age-restrict media %s for event %s', sha256, effect.event_id)
+            logger.exception(
+                'Failed to age-restrict media %s for event %s', sha256, _loggable_event_id(effect.event_id)
+            )
             raise
 
     def stop(self) -> None:
