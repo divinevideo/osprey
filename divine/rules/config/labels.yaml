@@ -125,6 +125,11 @@ labels:
   # --- Human review ---
 
   human_reviewed:
-    valid_for: [EventId, ReportedEventId, Pubkey]
+    valid_for: [EventId, ReportedEventId, Pubkey, MediaHash]
     connotation: neutral
-    description: A human moderator has reviewed this content or account. Human decisions override automated ones.
+    description: >-
+      A human moderator has reviewed this content or account. Human decisions
+      override automated ones. MediaHash is here because a label often names the
+      media and no event, and a decision on that shape has nowhere else to be
+      recorded: written to the empty event entity it would be lost, and the
+      automated rules would re-decide content a human had already cleared.

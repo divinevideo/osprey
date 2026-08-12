@@ -14,6 +14,7 @@ from udfs.ban_nostr_event import BanNostrEvent
 from udfs.check_moderation_result import CheckModerationResult
 from udfs.is_trusted_moderation_signer import IsTrustedModerationSigner
 from udfs.is_valid_media_hash import IsValidMediaHash
+from udfs.normalize_media_hash import NormalizeMediaHash
 from udfs.nostr_account_age import NostrAccountAge
 from udfs.resolve_event_author import ResolveEventAuthor
 
@@ -27,6 +28,7 @@ def register_udfs() -> Sequence[Type[UDFBase[Any, Any]]]:
         CheckModerationResult,
         IsTrustedModerationSigner,
         IsValidMediaHash,
+        NormalizeMediaHash,
         ResolveEventAuthor,
     ]
 

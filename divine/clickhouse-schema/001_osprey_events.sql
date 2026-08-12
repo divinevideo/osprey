@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `LabelSignerPubkey`    String DEFAULT '',
     `LabelTargetPubkey`    String DEFAULT '',
     `LabelTargetEventEntity` String DEFAULT '',
+    -- Hash-keyed entity shared by the label path and the video path, so a human's
+    -- decision on media with no event target can be recorded and read back.
+    `LabelContentHashEntity` String DEFAULT '',
+    `VideoHashEntity`        String DEFAULT '',
     `LabelTargetAuthorPubkey` String DEFAULT '',
 
     -- Video event fields
@@ -170,6 +174,9 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstHarassmentReport
 -- extracted feature needs a column or ClickHouse rejects the whole batch.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReporterPubkeyStr` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `EventReporterId` String DEFAULT '';
+-- Hash-keyed entity for human decisions on media with no event target.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelContentHashEntity` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `VideoHashEntity` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorContentHash` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorVideoUrl` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorSignal` LowCardinality(String) DEFAULT '';

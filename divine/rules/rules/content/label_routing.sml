@@ -474,6 +474,12 @@ RejectedLabelEmptyTarget = Rule(
 WhenRules(
   rules_any=[RejectedLabelNullTarget, RejectedLabelEmptyTarget],
   then=[
+    # Recorded against the MEDIA, since there is no event to attach it to. This is
+    # what stops ai_classification.sml re-flagging content a human just cleared:
+    # its guard reads this same entity off the video event's own hash. Written to
+    # LabelTargetEventEntity instead it would go to an empty entity and be lost,
+    # which is what happened before, and the clearance left no trace anywhere.
+    LabelAdd(entity=LabelContentHashEntity, label='human_reviewed'),
     DeclareVerdict(verdict='approve'),
   ],
 )

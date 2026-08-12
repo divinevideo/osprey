@@ -4,10 +4,13 @@
 # Osprey verdicts. The moderation-service classifies uploads into four tiers:
 #   SAFE / REVIEW / AGE_RESTRICTED / PERMANENT_BAN
 #
-# NOTE: This rule assumes the Nostr-Kafka bridge or moderation-service
-# publishes classification results in a format Osprey can consume.
-# The CheckModerationResult UDF is currently a stub returning 'unknown'.
-# Until it's wired to actual data, these rules won't fire.
+# NOTE: the claim that CheckModerationResult is "currently a stub returning
+# 'unknown'" was stale and is removed. The UDF makes a real HTTP call, and
+# moderation-api's /check-result endpoint answers it: probed 2026-08-12, it
+# returns 200 with a JSON body carrying status/blocked/age_restricted. So these
+# rules can fire, which is why the human_reviewed guards below are load-bearing
+# rather than theoretical. What a hash has no result for returns 'unknown' and
+# matches nothing, which is a per-item condition, not a disabled rule set.
 #
 # The moderation-service currently publishes NIP-32 labels (kind 1985),
 # not kind 1984 reports. The bridge or an adapter needs to normalize
@@ -27,6 +30,12 @@ AgeRestricted = Rule(
     Kind in [34235, 34236],
     CheckModerationResult(video_hash=VideoHash) == 'age_restricted',
     not HasLabel(entity=EventId, label='human_reviewed'),
+    # Also honour a decision recorded against the MEDIA rather than this event.
+    # A moderator clearing a false positive publishes a label that names the hash
+    # and usually no event, so the clearance lands on VideoHashEntity and the
+    # event-keyed guard above cannot see it. Without this, a human's decision was
+    # silently re-litigated by the classifier on the very next evaluation.
+    not HasLabel(entity=VideoHashEntity, label='human_reviewed'),
   ],
   description='AI classified video as age-restricted',
 )
@@ -47,6 +56,9 @@ NeedsReview = Rule(
     Kind in [34235, 34236],
     CheckModerationResult(video_hash=VideoHash) == 'review',
     not HasLabel(entity=EventId, label='human_reviewed'),
+    # Same reason as AgeRestricted above: re-queueing a human's own clearance for
+    # review is the most literal form of ignoring it.
+    not HasLabel(entity=VideoHashEntity, label='human_reviewed'),
   ],
   description='AI classified video as needing human review',
 )
