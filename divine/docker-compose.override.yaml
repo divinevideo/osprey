@@ -32,6 +32,12 @@ services:
       # Blossom: a COOP item built from a detector finding would otherwise carry a
       # production media URL into a local review queue.
       DIVINE_MEDIA_BASE_URL: "http://host.docker.internal:7676"
+      # Unset until 2026-08-12, and the consequence was invisible: coop_sink logs
+      # "COOP items will omit media (no MRT video)" once at INFO and then quietly
+      # omits it on every item, so a moderator reviewing a video report got no
+      # video. The chain runner now asserts this rather than leaving it to a log
+      # line. Same relay the adapter already talks to.
+      DIVINE_RELAY_WS_URL: "ws://host.docker.internal:4444"
       # REQUIRED locally since #21. get_validation_result_exporter() builds a
       # PubSubPublisher eagerly at engine bootstrap, and the Google client
       # resolves credentials in its constructor. There is no ADC in a local
