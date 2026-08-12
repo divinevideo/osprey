@@ -29,14 +29,14 @@ def test_accepts_uppercase():
 @pytest.mark.parametrize(
     'bad',
     [
-        None,          # tag absent entirely -- the common shape
-        '',            # tag present but empty
-        'a' * 63,      # one short: silently wrong, not obviously wrong
+        None,  # tag absent entirely -- the common shape
+        '',  # tag present but empty
+        'a' * 63,  # one short: silently wrong, not obviously wrong
         'a' * 65,
-        'g' * 64,      # right length, not hex
+        'g' * 64,  # right length, not hex
         'not-a-hash',
-        '  ' + 'a' * 64,   # padded; the sink does not strip, so nor do we
-        'a' * 64 + '\n',   # trailing newline, a common config/paste artifact
+        '  ' + 'a' * 64,  # padded; the sink does not strip, so nor do we
+        'a' * 64 + '\n',  # trailing newline, a common config/paste artifact
     ],
 )
 def test_rejects_anything_not_actionable(bad):

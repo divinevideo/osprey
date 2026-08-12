@@ -36,12 +36,7 @@ from pathlib import Path
 
 import pytest
 
-_LABEL_ROUTING = (
-    Path(__file__).resolve().parent.parent
-    / 'rules'
-    / 'content'
-    / 'label_routing.sml'
-)
+_LABEL_ROUTING = Path(__file__).resolve().parent.parent / 'rules' / 'content' / 'label_routing.sml'
 
 # `Name = Rule(when_all=[ ... ], description=...)`. Anchored on `description` so a
 # rule whose body is reformatted still matches, and non-greedy so adjacent rules
@@ -140,9 +135,7 @@ def test_there_is_at_least_one_family_to_check() -> None:
 
 @pytest.mark.parametrize('shape', ['null', 'empty'])
 @pytest.mark.parametrize('family', sorted(_families()))
-def test_target_requiring_family_also_covers_targetless_labels(
-    family: tuple[str, str], shape: str
-) -> None:
+def test_target_requiring_family_also_covers_targetless_labels(family: tuple[str, str], shape: str) -> None:
     shapes = _families()[family]
     if shapes['agnostic']:
         pytest.skip(

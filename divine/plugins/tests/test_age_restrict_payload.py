@@ -28,12 +28,7 @@ Pure stdlib: no osprey engine, no plugins, no network.
 import ast
 from pathlib import Path
 
-_SINK = (
-    Path(__file__).resolve().parents[1]
-    / 'src'
-    / 'services'
-    / 'relay_manager_sink.py'
-)
+_SINK = Path(__file__).resolve().parents[1] / 'src' / 'services' / 'relay_manager_sink.py'
 
 
 def _age_restrict_fn() -> ast.FunctionDef:

@@ -56,9 +56,7 @@ def _parse(raw: str) -> FrozenSet[str]:
     than once per event, so this is effectively startup-time reporting.
     """
     if not raw.strip():
-        logger.info(
-            '%s unset, trusting the production moderation identity only', ENV_VAR
-        )
+        logger.info('%s unset, trusting the production moderation identity only', ENV_VAR)
         return frozenset({PRODUCTION_MODERATION_PUBKEY})
 
     entries = [_normalize(entry) for entry in raw.split(',') if _normalize(entry)]
@@ -88,8 +86,9 @@ def _parse(raw: str) -> FrozenSet[str]:
             ENV_VAR,
         )
     else:
-        logger.info('%s: trusting %d moderation identit%s',
-                    ENV_VAR, len(accepted), 'y' if len(accepted) == 1 else 'ies')
+        logger.info(
+            '%s: trusting %d moderation identit%s', ENV_VAR, len(accepted), 'y' if len(accepted) == 1 else 'ies'
+        )
 
     return accepted
 

@@ -27,6 +27,7 @@ def _clear_parse_cache():
     yield
     _parse.cache_clear()
 
+
 OTHER = 'a' * 64
 UPPER = 'B' * 64
 
@@ -123,9 +124,7 @@ def test_total_failure_logs_an_error_naming_the_consequence(caplog):
 def test_partial_failure_warns_but_does_not_error(caplog):
     """One good key still enforces, so this is a warning, not an outage."""
     with caplog.at_level(logging.DEBUG, logger='trusted_moderation'):
-        assert trusted_moderation_pubkeys(
-            {'DIVINE_TRUSTED_MODERATION_PUBKEYS': f'{OTHER},typo'}
-        ) == frozenset({OTHER})
+        assert trusted_moderation_pubkeys({'DIVINE_TRUSTED_MODERATION_PUBKEYS': f'{OTHER},typo'}) == frozenset({OTHER})
 
     assert [r for r in caplog.records if r.levelno == logging.WARNING]
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]

@@ -30,22 +30,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 UDF_DIR = REPO_ROOT / 'divine' / 'plugins' / 'src' / 'udfs'
 RULES_DIR = REPO_ROOT / 'divine' / 'rules'
 SCHEMA = REPO_ROOT / 'divine' / 'clickhouse-schema' / '001_osprey_events.sql'
-SINK = (
-    REPO_ROOT
-    / 'osprey_worker'
-    / 'src'
-    / 'osprey'
-    / 'worker'
-    / 'sinks'
-    / 'sink'
-    / 'clickhouse_output_sink.py'
-)
+SINK = REPO_ROOT / 'osprey_worker' / 'src' / 'osprey' / 'worker' / 'sinks' / 'sink' / 'clickhouse_output_sink.py'
 
 # CustomExtractedFeature subclasses declare their wire name in a feature_name
 # classmethod. That name is prefixed with '__' by the execution context.
-FEATURE_NAME_RE = re.compile(
-    r"def feature_name\(cls\)[^:]*:\s*\n\s*return '([^']+)'", re.MULTILINE
-)
+FEATURE_NAME_RE = re.compile(r"def feature_name\(cls\)[^:]*:\s*\n\s*return '([^']+)'", re.MULTILINE)
 
 
 def effect_feature_names() -> set[str]:
@@ -85,9 +74,7 @@ def test_effect_feature_has_a_clickhouse_column(feature: str) -> None:
 def test_effect_feature_is_passed_through_by_the_sink(feature: str) -> None:
     sink = SINK.read_text()
     column = f'__{feature}'
-    passthrough = re.search(
-        r'_PASSTHROUGH_INTERNAL_KEYS\s*=\s*frozenset\(\s*\{(.*?)\}', sink, re.DOTALL
-    )
+    passthrough = re.search(r'_PASSTHROUGH_INTERNAL_KEYS\s*=\s*frozenset\(\s*\{(.*?)\}', sink, re.DOTALL)
     assert passthrough, f'Could not find _PASSTHROUGH_INTERNAL_KEYS in {SINK.name}'
     assert f"'{column}'" in passthrough.group(1), (
         f'{column} is not in _PASSTHROUGH_INTERNAL_KEYS, so the sink silently '
