@@ -18,10 +18,18 @@
 # is the actual reported event.
 #
 # Distinct-reporter dedup: RESOLVED for threshold=2. Every rule below is
-# guarded on `reporter_counted` against EventReporterId, the (event, reporter)
-# composite entity defined in models/nostr/kind1984_report.sml, and every acting
-# branch sets it. So the same reporter submitting two report events cannot
-# satisfy the threshold on their own.
+# guarded on `reporter_counted` against EventReporterId, the
+# (event, category, reporter) composite entity defined in
+# models/nostr/kind1984_report.sml, and every acting branch sets it. So the same
+# reporter submitting two report events cannot satisfy the threshold on their
+# own.
+#
+# The category has to be in that key, because the single `reporter_counted`
+# label guards all four rules below at once. Keyed on (event, reporter) alone, a
+# reporter's first report blocks their own later report of the same event under
+# a different category: it matches neither the first-report rule nor the
+# threshold rule, so it is silently dropped. Case D of
+# local-stubs/validate-distinct-reporter.sh is the regression test.
 #
 # Still NOT a count. The threshold is fixed at 2 by the shape of these rules;
 # going higher needs a chain of labels that does not scale. A real count needs

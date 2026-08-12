@@ -21,7 +21,15 @@ ReporterPubkeyStr: str = JsonData(
   coerce_type=True,
 )
 
-# One entity per (reported event, reporter) pair.
+# The report's category, normalised by the bridge to a canonical value. Declared
+# here rather than further down because the composite key below depends on it.
+ReportReason: str = JsonData(
+  path='$.report_reason',
+  coerce_type=True,
+  required=False
+)
+
+# One entity per (reported event, report category, reporter) triple.
 #
 # Osprey has no counting primitive, so a threshold is emulated as a chain of
 # label presences on the target. That chain cannot tell two reporters from one
@@ -30,12 +38,29 @@ ReporterPubkeyStr: str = JsonData(
 # contribution idempotent: a second report from the SAME reporter finds the
 # label already set and does not advance the threshold.
 #
+# The CATEGORY is part of the key, and leaving it out was a silent-drop bug.
+# A single `reporter_counted` label guards every category's rules at once, so
+# without the category one report poisons the rest: a reporter who flags an event
+# for violence and later flags the same event for nudity matches neither the
+# first-report rule (guard already set) nor the threshold rule (that category has
+# no prior report), so the second report matches NOTHING. No verdict, no COOP
+# item, no telemetry. It also inflated the threshold, since that category then
+# needed a third distinct reporter.
+#
+# The dedup that is wanted is "this person has already made THIS accusation",
+# not "this person has already spoken about this event".
+#
+# Ordering is deliberate. The reason is drawn from the bridge's canonical set and
+# the reporter pubkey is fixed-length hex from the signed event, so both are
+# colon-free and the id parses unambiguously from the right. Only the event id is
+# attacker-shaped, and it sits first where it cannot absorb a neighbouring field.
+#
 # This is distinct-reporter DEDUP, not counting. The threshold is still fixed at
 # 2 by the shape of the rules. A real count needs the funnelcake accessor in the
 # PRD's C2 (`uniq(reporter_pubkey)` already exists there).
 EventReporterId: Entity[str] = Entity(
   type='EventReporter',
-  id=StringJoin(s=':', iterable=[ReportedEvent, ReporterPubkeyStr]),
+  id=StringJoin(s=':', iterable=[ReportedEvent, ReportReason, ReporterPubkeyStr]),
 )
 
 # CLAIMED author. Written by the reporter in the report's p-tag and never
@@ -58,9 +83,3 @@ ReportedPubkey: Entity[str] = EntityJson(
 # Costs nothing on non-report events: a missing or malformed event id returns ''
 # without any network call.
 ReportedAuthorPubkey: str = ResolveEventAuthor(event_id=ReportedEvent)
-
-ReportReason: str = JsonData(
-  path='$.report_reason',
-  coerce_type=True,
-  required=False
-)

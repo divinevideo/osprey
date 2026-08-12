@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `ReportedPubkey`       String DEFAULT '',
     `ReportedAuthorPubkey` String DEFAULT '',
     `ReportReason`         String DEFAULT '',
+    -- Distinct-reporter dedup. These are plain extracted features rather than
+    -- rule hits, and they need a column for the same reason: an unrecognised
+    -- name makes the sink reject the whole batch. They were in the upgrade DDL
+    -- below but not here, so a database created fresh from this file would have
+    -- failed every insert while an upgraded one worked.
+    `ReporterPubkeyStr`    String DEFAULT '',
+    `EventReporterId`      String DEFAULT '',
 
     -- Kind 1985 label event fields
     `LabelNamespace`       LowCardinality(String) DEFAULT '',
