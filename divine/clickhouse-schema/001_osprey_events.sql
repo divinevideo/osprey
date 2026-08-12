@@ -149,6 +149,8 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstChildSafetyRepor
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstHarassmentReport` UInt8 DEFAULT 0;
 -- Coupled to models/ai_detector_nsfw.sml and its review-only rule. Every
 -- extracted feature needs a column or ClickHouse rejects the whole batch.
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReporterPubkeyStr` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `EventReporterId` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorContentHash` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorVideoUrl` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `DetectorSignal` LowCardinality(String) DEFAULT '';
