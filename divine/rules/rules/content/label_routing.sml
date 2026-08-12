@@ -126,8 +126,13 @@ ConfirmedNudityHashOnlyEmptyTarget = Rule(
 WhenRules(
   rules_any=[ConfirmedNudityHashOnlyNullTarget, ConfirmedNudityHashOnlyEmptyTarget],
   then=[
-    AgeRestrictNostrEvent(event_id='', sha256=LabelContentHash, reason='contain nudity or sexual content'),
-    DeclareVerdict(verdict='restrict'),
+    # Review, NOT enforcement. These branches used to drop silently; giving them
+    # an outcome is the fix. Making that outcome an automatic age-restrict is a
+    # separate change in enforcement posture and is deliberately not made here:
+    # a hash with no event target is the COMMON shape, so it would convert most
+    # confirmed labels from human review to automation in a bug-fix branch.
+    # Tracked separately; see the enforcement-posture issue.
+    DeclareVerdict(verdict='flag_for_review'),
   ],
 )
 
@@ -158,7 +163,7 @@ WhenRules(
   ],
 )
 
-# See ConfirmedNudityHashOnly*: same decision, no event target, enforces the same.
+# See ConfirmedNudityHashOnly*: same decision, no event target, reviewed the same.
 ConfirmedViolenceHashOnlyNullTarget = Rule(
   when_all=[
     Kind == 1985,
@@ -190,8 +195,8 @@ ConfirmedViolenceHashOnlyEmptyTarget = Rule(
 WhenRules(
   rules_any=[ConfirmedViolenceHashOnlyNullTarget, ConfirmedViolenceHashOnlyEmptyTarget],
   then=[
-    AgeRestrictNostrEvent(event_id='', sha256=LabelContentHash, reason='contain violent or graphic content'),
-    DeclareVerdict(verdict='restrict'),
+    # See the nudity block above: review, not enforcement, on purpose.
+    DeclareVerdict(verdict='flag_for_review'),
   ],
 )
 
