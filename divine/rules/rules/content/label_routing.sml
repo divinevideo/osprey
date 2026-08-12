@@ -364,6 +364,47 @@ WhenRules(
   ],
 )
 
+# Same decision, no event target. The publisher sets the `e` tag only when it has
+# an event id, so this is the ordinary shape of a label rather than an edge case,
+# and without these two rules it matched nothing at all: no verdict, no COOP item,
+# no telemetry row. The verdict matches the target-present case because the
+# moderator's decision is the same; only our ability to label the event differs.
+#
+# `!= None` does not exclude '' and `== None` does not catch it, so both spellings
+# are needed or one shape still falls through.
+ConfirmedAIGeneratedNullTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelValue in ['ai-generated', 'deepfake'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    LabelTargetEvent == None,
+  ],
+  description='Human confirmed AI-generated or deepfake content (null event target)',
+)
+
+ConfirmedAIGeneratedEmptyTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelValue in ['ai-generated', 'deepfake'],
+    LabelSource == 'human-moderator',
+    not LabelRejected,
+    LabelTargetEvent == '',
+  ],
+  description='Human confirmed AI-generated or deepfake content (empty event target)',
+)
+
+WhenRules(
+  rules_any=[ConfirmedAIGeneratedNullTarget, ConfirmedAIGeneratedEmptyTarget],
+  then=[
+    DeclareVerdict(verdict='flag_for_review'),
+  ],
+)
+
 # --- Rejected labels (human verified false positive) ---
 
 # Human rejected AI classification. Mark as reviewed, no enforcement.
@@ -385,6 +426,46 @@ WhenRules(
   rules_any=[RejectedLabel],
   then=[
     LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
+    DeclareVerdict(verdict='approve'),
+  ],
+)
+
+# A rejection with no event target. This was the costliest of the missing shapes:
+# a moderator clearing a false positive through the admin category-verification
+# path publishes exactly this label, and it matched nothing, so the clearance left
+# no trace anywhere in Osprey.
+#
+# The verdict alone does not yet stop automated re-classification. That guard is
+# keyed on `human_reviewed` against the event entity, which a targetless label
+# cannot write, and closing it is a separate change to ai_classification.sml
+# rather than something to fold in here silently.
+RejectedLabelNullTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelSource == 'human-moderator',
+    LabelRejected,
+    LabelTargetEvent == None,
+  ],
+  description='Human rejected AI classification (false positive, null event target)',
+)
+
+RejectedLabelEmptyTarget = Rule(
+  when_all=[
+    Kind == 1985,
+    IsTrustedModerationSigner(pubkey=LabelSignerPubkey),
+    LabelNamespace == 'content-warning',
+    LabelSource == 'human-moderator',
+    LabelRejected,
+    LabelTargetEvent == '',
+  ],
+  description='Human rejected AI classification (false positive, empty event target)',
+)
+
+WhenRules(
+  rules_any=[RejectedLabelNullTarget, RejectedLabelEmptyTarget],
+  then=[
     DeclareVerdict(verdict='approve'),
   ],
 )
