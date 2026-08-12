@@ -17,11 +17,16 @@
 # reports is unsafe. Event-level hide is safe because the ReportedEventId
 # is the actual reported event.
 #
-# P2: distinct-reporter deduplication. Labels track target event +
-# category but not reporter identity, so the same reporter submitting
-# two distinct report events can satisfy the threshold. Mitigated by
-# the action being event-hide (reversible), not pubkey ban.
-# Proper fix: counter UDF keyed by (event, category, reporter_pubkey).
+# Distinct-reporter dedup: RESOLVED for threshold=2. Every rule below is
+# guarded on `reporter_counted` against EventReporterId, the (event, reporter)
+# composite entity defined in models/nostr/kind1984_report.sml, and every acting
+# branch sets it. So the same reporter submitting two report events cannot
+# satisfy the threshold on their own.
+#
+# Still NOT a count. The threshold is fixed at 2 by the shape of these rules;
+# going higher needs a chain of labels that does not scale. A real count needs
+# the funnelcake accessor in the PRD's C2, where `uniq(reporter_pubkey)` already
+# exists but is not reachable from a rule.
 
 Import(
   rules=[
@@ -39,6 +44,7 @@ FirstSexualReport = Rule(
     ReportedEvent != '',
     not HasLabel(entity=ReportedEventId, label='sexual_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
+    not HasLabel(entity=EventReporterId, label='reporter_counted'),
   ],
   description='First report of sexual content on this event',
 )
@@ -50,6 +56,7 @@ FirstViolenceReport = Rule(
     ReportedEvent != '',
     not HasLabel(entity=ReportedEventId, label='violence_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
+    not HasLabel(entity=EventReporterId, label='reporter_counted'),
   ],
   description='First report of violence on this event',
 )
@@ -57,6 +64,7 @@ FirstViolenceReport = Rule(
 WhenRules(
   rules_any=[FirstSexualReport],
   then=[
+    LabelAdd(entity=EventReporterId, label='reporter_counted'),
     LabelAdd(entity=ReportedEventId, label='sexual_reported'),
     DeclareVerdict(verdict='flag_for_review'),
   ],
@@ -65,6 +73,7 @@ WhenRules(
 WhenRules(
   rules_any=[FirstViolenceReport],
   then=[
+    LabelAdd(entity=EventReporterId, label='reporter_counted'),
     LabelAdd(entity=ReportedEventId, label='violence_reported'),
     DeclareVerdict(verdict='flag_for_review'),
   ],
@@ -79,6 +88,7 @@ ThresholdSexualReport = Rule(
     ReportedEvent != '',
     HasLabel(entity=ReportedEventId, label='sexual_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
+    not HasLabel(entity=EventReporterId, label='reporter_counted'),
   ],
   description='Second+ report of sexual content, threshold met',
 )
@@ -90,6 +100,7 @@ ThresholdViolenceReport = Rule(
     ReportedEvent != '',
     HasLabel(entity=ReportedEventId, label='violence_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
+    not HasLabel(entity=EventReporterId, label='reporter_counted'),
   ],
   description='Second+ report of violence, threshold met',
 )
@@ -98,6 +109,7 @@ WhenRules(
   rules_any=[ThresholdSexualReport],
   then=[
     BanNostrEvent(event_id=ReportedEvent, pubkey='', reason='Multi-report threshold: nudity'),
+    LabelAdd(entity=EventReporterId, label='reporter_counted'),
     LabelAdd(entity=ReportedEventId, label='threshold_met'),
     LabelAdd(entity=ReportedEventId, label='auto_hidden'),
     DeclareVerdict(verdict='auto_hide'),
@@ -108,6 +120,7 @@ WhenRules(
   rules_any=[ThresholdViolenceReport],
   then=[
     BanNostrEvent(event_id=ReportedEvent, pubkey='', reason='Multi-report threshold: violence'),
+    LabelAdd(entity=EventReporterId, label='reporter_counted'),
     LabelAdd(entity=ReportedEventId, label='threshold_met'),
     LabelAdd(entity=ReportedEventId, label='auto_hidden'),
     DeclareVerdict(verdict='auto_hide'),

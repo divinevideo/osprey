@@ -14,6 +14,30 @@ ReportedEvent: str = JsonData(
   required=False
 )
 
+# The reporter's own pubkey as a plain string. `Pubkey` in base.sml is the
+# Entity form; this is for composing the key below.
+ReporterPubkeyStr: str = JsonData(
+  path='$.pubkey',
+  coerce_type=True,
+)
+
+# One entity per (reported event, reporter) pair.
+#
+# Osprey has no counting primitive, so a threshold is emulated as a chain of
+# label presences on the target. That chain cannot tell two reporters from one
+# reporter reporting twice, which multi_report_threshold.sml documents as its P2
+# defect. Labelling this composite entity instead makes each reporter's
+# contribution idempotent: a second report from the SAME reporter finds the
+# label already set and does not advance the threshold.
+#
+# This is distinct-reporter DEDUP, not counting. The threshold is still fixed at
+# 2 by the shape of the rules. A real count needs the funnelcake accessor in the
+# PRD's C2 (`uniq(reporter_pubkey)` already exists there).
+EventReporterId: Entity[str] = Entity(
+  type='EventReporter',
+  id=StringJoin(s=':', iterable=[ReportedEvent, ReporterPubkeyStr]),
+)
+
 # CLAIMED author. Written by the reporter in the report's p-tag and never
 # checked against the reported event. Do not enforce on this; see
 # ReportedAuthorPubkey below.

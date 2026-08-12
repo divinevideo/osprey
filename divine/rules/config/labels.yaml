@@ -63,6 +63,14 @@ labels:
 
   # --- Multi-report threshold tracking ---
 
+  reporter_counted:
+    valid_for: [EventReporter]
+    connotation: neutral
+    description: >-
+      This specific (reported event, reporter) pair has already been counted
+      toward a multi-report threshold. Makes each reporter's contribution
+      idempotent so one reporter cannot satisfy the threshold alone.
+
   sexual_reported:
     valid_for: [EventId, ReportedEventId]
     connotation: negative
