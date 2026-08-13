@@ -10,16 +10,19 @@ gevent, requests, sentry_sdk and the osprey engine, and the plugin test step
 installs pytest and websocket-client only. So the sink cannot be imported here and
 its payload could not be asserted on at all. Pulling the pure part out follows the
 pattern already used by `media_hash.py`, `reported_author.py`,
-`trusted_moderation.py` and `response_guard.py` -- logic lifted out of a sink
+and `trusted_moderation.py` -- logic lifted out of a sink
 precisely so it can be tested.
 
 The I/O stays in the sink: the media lookup mutates the returned dict afterwards,
 and the POST is unchanged. This module is only the part that turns features into
 fields.
 
-Each test below was mutation-checked: the behaviour it pins was changed in the
-source, and the test was confirmed to fail. A characterisation test that cannot
-fail pins nothing.
+Every test below was mutation-checked -- the behaviour it pins was changed in the
+source and the test confirmed to fail -- and review then found SIX more mutations
+that survived anyway, including a call site that named the reporter as creator.
+Those are closed. Treat this as "these specific behaviours are pinned", never as
+"the payload is fully covered": per-test mutation checking says nothing about the
+mutations nobody thought to try.
 """
 
 import ast
@@ -32,7 +35,10 @@ AUTHOR = 'bc02e0a6c0f01ad9cb57a2b0f8ef8241bc5ff979ce4452ce9e243de457756725'
 REPORTER = '19f9afb8f855f5e86b5bea160e78ec5871648b10dedb043f4806fca8ce50e4d3'
 EVENT = '3f8a1c9e77b24d6e05a4c3b81f9e2d70a6c5b4938e7f1a2d0c9b8a7f6e5d4c3b'
 WRAPPER = '9d1e4f7a3b8c2059e6f4a1d3c7b092e58a4f6d1c3e9b7a250f8c6d4b2a1e3f90'
-MEDIA_BASE = 'https://media.divine.video'
+# Deliberately NOT the production default. An earlier version used
+# 'https://media.divine.video', the same value the sink falls back to, so
+# hardcoding the prod host in the source passed every test.
+MEDIA_BASE = 'https://media.test.invalid'
 
 
 def build(features=None, **kw):
@@ -131,6 +137,23 @@ def test_optional_fields_are_omitted_when_empty_string(feature, field):
     assert field not in build({feature: ''})
 
 
+def test_pass_through_fields_are_carried_verbatim():
+    """Not coerced, not truncated. Silently shortening moderator-visible text is
+    inside what this module protects, and ReportedEventId is the ONLY field
+    deliberately coerced."""
+    long_text = 'x' * 900
+    got = build({'NoteText': long_text, 'ReportReason': 'nudity', 'LabelValue': 'nsfw'})
+    assert got['text'] == long_text
+    assert got['report_reason'] == 'nudity'
+    assert got['label_value'] == 'nsfw'
+
+
+def test_detector_confidence_is_not_coerced():
+    got = build({'DetectorContentHash': EVENT, 'DetectorConfidence': 1}, action_name=DETECTOR)
+    assert got['confidence'] == 1
+    assert isinstance(got['confidence'], int)
+
+
 def test_note_text_becomes_the_text_field():
     got = build({'NoteText': 'six second loop'})
     assert got['text'] == 'six second loop'
@@ -192,6 +215,30 @@ def test_detector_branch_requires_the_hash_to_MATCH_the_content_id():
     assert 'confidence' not in got
 
 
+def test_detector_branch_does_not_fire_when_the_hash_is_ABSENT():
+    """Distinct from the mismatch case, and the more dangerous one.
+
+    Guarding with `features.get('DetectorContentHash', content_id) == content_id`
+    survives the mismatch test, but fabricates a media_url, a content-warning
+    namespace and an 'nsfw' label for bytes that were never classified.
+    """
+    got = build({}, action_name=DETECTOR)
+    assert 'media_url' not in got
+    assert 'label_namespace' not in got
+    assert 'label_value' not in got
+
+
+def test_detector_branch_adds_exactly_five_fields_and_no_others():
+    """Pins the branch's OUTPUT, not just that it fired. This is where an
+    accidental passthrough of the caller-controlled DetectorVideoUrl would land."""
+    base = set(build({}))
+    got = build(
+        {'DetectorContentHash': EVENT, 'DetectorVideoUrl': 'https://evil.example/x.mp4'},
+        action_name=DETECTOR,
+    )
+    assert set(got) - base == {'media_url', 'label_namespace', 'label_value', 'confidence', 'model'}
+
+
 def test_detector_branch_does_not_fire_for_other_actions():
     got = build({'DetectorContentHash': EVENT}, action_name='nostr_kind_1984')
     assert 'media_url' not in got
@@ -222,7 +269,7 @@ def test_a_fully_populated_report_produces_the_expected_field_set():
             'NoteText': 'six second loop, kitchen dance',
         }
     )
-    assert set(got) == {
+    assert list(got) == [
         'event_id',
         'source_event_id',
         'pubkey',
@@ -234,7 +281,7 @@ def test_a_fully_populated_report_produces_the_expected_field_set():
         'reported_pubkey',
         'reported_event_id',
         'text',
-    }
+    ], 'field ORDER as well as membership: Coop renders fields in the order given'
 
 
 # --- the call site ------------------------------------------------------------
@@ -291,6 +338,47 @@ def test_the_sink_passes_no_unknown_keyword():
         f'coop_sink.py passes {sorted(unknown)}, which build_content_fields does not accept. '
         f'Raises TypeError at runtime.'
     )
+
+
+def test_the_sink_passes_the_RIGHT_EXPRESSION_for_every_keyword():
+    """Names alone are not enough, and this gap already shipped once.
+
+    An earlier version of these tests compared only keyword NAMES against the
+    signature. Every one of these passed the full suite:
+
+        author=features.get('ReportedPubkey', '')   <- reporter as creator
+        verdict=result.action.action_name           <- swapped with action_name
+        media_base_url=self._url                    <- Coop's API URL as media host
+        content_id=wrapper_event_id                 <- swapped with wrapper
+
+    The first is the exact regression recorded in task #21: Coop's `creator`
+    naming the reporter, so Unban-User and Unsuspend-User reverse against the
+    person who FILED the report. `test_pubkey_is_the_resolved_author_not_the_reporter`
+    does not catch it -- that pins the function, and the sink is what runs.
+
+    There is no other guard: mypy excludes `divine/` (.pre-commit-config.yaml), so
+    a wrong expression of the right type is caught by nothing else in CI.
+    """
+    expected = {
+        'content_id': 'content_id',
+        'wrapper_event_id': 'wrapper_event_id',
+        'author': 'author',
+        'verdict': 'verdict.verdict',
+        'action_name': 'result.action.action_name',
+        'media_base_url': 'self._media_base_url',
+    }
+    actual = {kw.arg: ast.unparse(kw.value) for kw in _call_site().keywords if kw.arg is not None}
+    assert actual == expected, (
+        f'coop_sink.py passes the wrong expression for one or more keywords.\n'
+        f'  expected: {expected}\n  actual:   {actual}'
+    )
+
+
+def test_the_sink_passes_the_features_dict_positionally():
+    """The one positional parameter, and it must be `features` itself."""
+    call = _call_site()
+    assert len(call.args) == 1, f'expected features passed positionally, found {len(call.args)} positional args'
+    assert ast.unparse(call.args[0]) == 'features'
 
 
 def test_the_sink_passes_features_positionally():

@@ -5,7 +5,7 @@ what we send to moderators can be asserted on. `coop_sink.py` imports gevent,
 requests, sentry_sdk and the osprey engine, while the plugin test step installs
 pytest and websocket-client only -- so the payload could not be tested at all
 while it lived there. Same reason `media_hash.py`, `reported_author.py`,
-`trusted_moderation.py` and `response_guard.py` are separate modules.
+and `trusted_moderation.py` are separate modules.
 
 Deliberately pure: no I/O, no clock, no config beyond what is passed in. The media
 lookup that runs afterwards still lives in the sink and mutates the returned dict,
