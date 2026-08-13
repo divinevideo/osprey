@@ -215,3 +215,74 @@ def test_a_fully_populated_report_produces_the_expected_field_set():
         'verdict', 'action_name', 'report_reason', 'reported_pubkey',
         'reported_event_id', 'text',
     }
+
+
+# --- the call site ------------------------------------------------------------
+#
+# Everything above proves the FUNCTION is right. None of it proves the SINK calls
+# it correctly, and that gap cannot be closed the usual way here: coop_sink.py
+# imports gevent, requests, sentry_sdk and the osprey engine, so it cannot be
+# imported in this test environment, and the worker image cannot currently be
+# rebuilt to run it (the base image build fails on dependency rot unrelated to
+# this code -- pinned grpcio-tools needs pkg_resources, which current pip no
+# longer ships).
+#
+# So a wrong keyword name would pass every test above and fail on the first real
+# event. This checks it statically, which is the one technique available.
+
+import ast
+from pathlib import Path
+
+_SINK = Path(__file__).resolve().parents[1] / 'src' / 'services' / 'coop_sink.py'
+_MODULE = Path(__file__).resolve().parents[1] / 'src' / 'coop_payload.py'
+
+
+def _signature():
+    tree = ast.parse(_MODULE.read_text())
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == 'build_content_fields'
+    )
+    return fn
+
+
+def _call_site():
+    tree = ast.parse(_SINK.read_text())
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == 'build_content_fields'
+    ]
+    assert len(calls) == 1, f'expected exactly one call site, found {len(calls)}'
+    return calls[0]
+
+
+def test_the_sink_passes_every_required_keyword():
+    fn = _signature()
+    required = {a.arg for a in fn.args.kwonlyargs}
+    passed = {k.arg for k in _call_site().keywords if k.arg is not None}
+    missing = required - passed
+    assert not missing, (
+        f'coop_sink.py calls build_content_fields without {sorted(missing)}. '
+        f'This raises TypeError on the first real event and no other test here can see it.'
+    )
+
+
+def test_the_sink_passes_no_unknown_keyword():
+    fn = _signature()
+    known = {a.arg for a in fn.args.kwonlyargs} | {a.arg for a in fn.args.args}
+    passed = {k.arg for k in _call_site().keywords if k.arg is not None}
+    unknown = passed - known
+    assert not unknown, (
+        f'coop_sink.py passes {sorted(unknown)}, which build_content_fields does not accept. '
+        f'Raises TypeError at runtime.'
+    )
+
+
+def test_the_sink_passes_features_positionally():
+    """The one positional parameter. If it ever moves to a keyword, this fails
+    loudly rather than the call silently binding it to something else."""
+    call = _call_site()
+    assert len(call.args) == 1, (
+        f'expected features passed positionally, found {len(call.args)} positional args'
+    )
