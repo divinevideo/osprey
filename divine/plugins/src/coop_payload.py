@@ -1,11 +1,15 @@
 """Turns Osprey features into the `content` fields Coop stores on an item.
 
 Lifted out of `COOPSink._submit_content` **without behaviour change**, so that
-what we send to moderators can be asserted on. `coop_sink.py` imports gevent,
-requests, sentry_sdk and the osprey engine, while the plugin test step installs
-pytest and websocket-client only -- so the payload could not be tested at all
-while it lived there. Same reason `media_hash.py`, `reported_author.py`,
-and `trusted_moderation.py` are separate modules.
+what we send to moderators can be asserted on directly. `coop_sink.py` imports
+gevent, requests, sentry_sdk and the osprey engine, while the plugin test step
+installs pytest and websocket-client only -- the same reason `media_hash.py`,
+`reported_author.py` and `trusted_moderation.py` are separate modules.
+
+Those imports make the sink awkward to test, not impossible: stubbing them into
+`sys.modules` works, and `test_coop_sink_payload_wire.py` does it to assert on the
+actual POST body. Both layers are wanted. This one pins field-by-field behaviour
+cheaply; that one catches whether the right values reach the call at all.
 
 Deliberately pure: no I/O, no clock, no config beyond what is passed in. The media
 lookup that runs afterwards still lives in the sink and mutates the returned dict,

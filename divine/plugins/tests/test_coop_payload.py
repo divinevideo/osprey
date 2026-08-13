@@ -7,22 +7,30 @@ intended, then update the test deliberately.
 
 Why the payload builder is a separate module at all: `coop_sink.py` imports
 gevent, requests, sentry_sdk and the osprey engine, and the plugin test step
-installs pytest and websocket-client only. So the sink cannot be imported here and
-its payload could not be asserted on at all. Pulling the pure part out follows the
-pattern already used by `media_hash.py`, `reported_author.py`,
-and `trusted_moderation.py` -- logic lifted out of a sink
-precisely so it can be tested.
+installs pytest and websocket-client only. Pulling the pure part out follows the
+pattern already used by `media_hash.py`, `reported_author.py`, and
+`trusted_moderation.py` -- logic lifted out of a sink precisely so it can be
+tested, with no new CI dependency.
+
+That is a readability argument, NOT an impossibility one. An earlier version of
+this docstring claimed the sink "cannot be imported here"; it can, by stubbing
+those modules into `sys.modules`, and `test_coop_sink_payload_wire.py` now does
+exactly that. The correction matters, because the false premise is what justified
+asserting on the call site's *syntax* -- and syntax cannot see a variable rebound
+on the line above the call. That is precisely how the reporter-as-creator
+regression slipped through all 302 of these.
 
 The I/O stays in the sink: the media lookup mutates the returned dict afterwards,
 and the POST is unchanged. This module is only the part that turns features into
 fields.
 
 Every test below was mutation-checked -- the behaviour it pins was changed in the
-source and the test confirmed to fail -- and review then found SIX more mutations
-that survived anyway, including a call site that named the reporter as creator.
-Those are closed. Treat this as "these specific behaviours are pinned", never as
-"the payload is fully covered": per-test mutation checking says nothing about the
-mutations nobody thought to try.
+source and the test confirmed to fail. Review then defeated the suite anyway, and
+re-running the battery after the fix found two more survivors, because the fixture
+values were already lowercase and unpadded, making `.lower()`, `.strip()` and
+`str()` identity operations. The battery now stands at 12/12. Treat this as "these
+specific behaviours are pinned", never as "the payload is fully covered": mutation
+checking says nothing about the mutations nobody thought to try.
 """
 
 import ast
@@ -138,14 +146,53 @@ def test_optional_fields_are_omitted_when_empty_string(feature, field):
 
 
 def test_pass_through_fields_are_carried_verbatim():
-    """Not coerced, not truncated. Silently shortening moderator-visible text is
-    inside what this module protects, and ReportedEventId is the ONLY field
-    deliberately coerced."""
-    long_text = 'x' * 900
-    got = build({'NoteText': long_text, 'ReportReason': 'nudity', 'LabelValue': 'nsfw'})
-    assert got['text'] == long_text
-    assert got['report_reason'] == 'nudity'
-    assert got['label_value'] == 'nsfw'
+    """Not coerced, not truncated, not normalised. ReportedEventId is the ONLY
+    field deliberately transformed.
+
+    **The fixture values are the test.** An earlier version used 'nudity' and
+    'nsfw', which are already lowercase, unpadded strings, so str(), .lower() and
+    .strip() were all identity on them and six separate coercion mutations passed
+    against the one test whose whole purpose is pass-through. Every value below is
+    chosen so that a transformation CHANGES it: mixed case, surrounding whitespace,
+    and one non-string.
+
+    label_namespace matters most. Lowercasing it would collide the three disjoint
+    kind-1985 namespaces.
+    """
+    long_text = '  Six Second Loop  ' + 'x' * 900
+    got = build(
+        {
+            'NoteText': long_text,
+            'ReportReason': '  Nudity  ',
+            'LabelValue': '  NSFW  ',
+            'LabelNamespace': '  Moderation/Resolution  ',
+            'ReportedPubkey': 12345,
+        }
+    )
+    assert got['text'] == long_text, 'text must not be truncated, stripped or coerced'
+    assert got['report_reason'] == '  Nudity  '
+    assert got['label_value'] == '  NSFW  '
+    assert got['label_namespace'] == '  Moderation/Resolution  ', (
+        'case must be preserved: lowercasing collides the three disjoint 1985 namespaces'
+    )
+    assert got['reported_pubkey'] == 12345, 'carried as given; only ReportedEventId is str()-coerced'
+    assert not isinstance(got['reported_pubkey'], str)
+
+
+def test_non_string_pass_through_values_are_not_stringified():
+    """Separate from the test above because str() is INVISIBLE against a string.
+
+    Mixed case and whitespace catch .lower() and .strip(), but `str('  Nudity  ')`
+    is identity, so a str() coercion survived every assertion until this existed.
+    Only a non-string value can see it. Osprey features are typed by the SML rule
+    that produced them, so a numeric value reaching one of these is possible;
+    ReportedEventId is the one field where we accept the coercion on purpose.
+    """
+    got = build({'ReportReason': 42, 'LabelValue': 7, 'LabelNamespace': 3})
+    assert got['report_reason'] == 42
+    assert got['label_value'] == 7
+    assert got['label_namespace'] == 3
+    assert not any(isinstance(got[k], str) for k in ('report_reason', 'label_value', 'label_namespace'))
 
 
 def test_detector_confidence_is_not_coerced():
@@ -222,10 +269,15 @@ def test_detector_branch_does_not_fire_when_the_hash_is_ABSENT():
     survives the mismatch test, but fabricates a media_url, a content-warning
     namespace and an 'nsfw' label for bytes that were never classified.
     """
-    got = build({}, action_name=DETECTOR)
+    got = build(
+        {'LabelNamespace': 'moderation/resolution', 'LabelValue': 'dismissed'},
+        action_name=DETECTOR,
+    )
     assert 'media_url' not in got
-    assert 'label_namespace' not in got
-    assert 'label_value' not in got
+    # Supplied rather than absent, so this proves the branch did not OVERRIDE them,
+    # instead of passing for two reasons at once.
+    assert got['label_namespace'] == 'moderation/resolution'
+    assert got['label_value'] == 'dismissed'
 
 
 def test_detector_branch_adds_exactly_five_fields_and_no_others():
@@ -258,7 +310,14 @@ def test_non_detector_actions_never_get_a_media_url_here():
 
 def test_a_fully_populated_report_produces_the_expected_field_set():
     """Locks the whole shape, so an added or removed field is visible as a diff
-    rather than being noticed only in Coop."""
+    rather than being noticed only in Coop.
+
+    Order is pinned as characterisation, NOT because Coop depends on it. Coop's
+    getPrimaryContentFields iterates the REGISTERED SCHEMA and looks up
+    content[field.name], so what a moderator sees is ordered by the schema, not by
+    our key order. A reorder here is therefore harmless to moderators; do not
+    refuse one on this test's account, just update it deliberately.
+    """
     got = build(
         {
             'Kind': 34236,
@@ -281,7 +340,7 @@ def test_a_fully_populated_report_produces_the_expected_field_set():
         'reported_pubkey',
         'reported_event_id',
         'text',
-    ], 'field ORDER as well as membership: Coop renders fields in the order given'
+    ], 'field ORDER as well as membership, pinned as pure characterisation'
 
 
 # --- the call site ------------------------------------------------------------
@@ -379,10 +438,3 @@ def test_the_sink_passes_the_features_dict_positionally():
     call = _call_site()
     assert len(call.args) == 1, f'expected features passed positionally, found {len(call.args)} positional args'
     assert ast.unparse(call.args[0]) == 'features'
-
-
-def test_the_sink_passes_features_positionally():
-    """The one positional parameter. If it ever moves to a keyword, this fails
-    loudly rather than the call silently binding it to something else."""
-    call = _call_site()
-    assert len(call.args) == 1, f'expected features passed positionally, found {len(call.args)} positional args'
