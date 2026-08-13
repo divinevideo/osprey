@@ -5,9 +5,9 @@ import requests
 from media_hash import is_valid_media_hash, normalize_media_hash
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
-from response_guard import require_json_response
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
 from reported_author import normalize_event_id
+from response_guard import require_json_response
 from udfs.age_restrict_nostr_event import AgeRestrictEffect
 from udfs.ban_nostr_event import BanEventEffect
 

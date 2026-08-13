@@ -11,7 +11,6 @@ requests -- which is why the sink itself can only be checked structurally.
 """
 
 import pytest
-
 from response_guard import NotAnApiResponse, require_json_response
 
 
