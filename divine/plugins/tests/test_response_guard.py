@@ -63,11 +63,15 @@ def test_rejects_plain_text_with_no_content_type_at_all() -> None:
 
 
 def test_rejects_a_content_type_that_is_not_json() -> None:
-    # Exercises the content-type branch on its own. Previously this branch could
-    # be deleted entirely with every test still green, because the HTML case was
-    # caught by the body-shape check first.
-    with pytest.raises(NotAnApiResponse):
-        require_json_response('u', 200, 'text/plain', 'Access denied')
+    """Exercises the content-type branch ALONE.
+
+    The body must be valid, success-carrying JSON, otherwise a later check
+    rejects it anyway and this branch could be deleted with the suite still
+    green. That is exactly what happened to the first version of this test.
+    """
+    with pytest.raises(NotAnApiResponse) as e:
+        require_json_response('u', 200, 'text/plain', _OK)
+    assert 'text/plain' in str(e.value), 'must fail ON the content-type, not incidentally'
 
 
 def test_rejects_a_json_shaped_denial_from_a_gateway() -> None:
