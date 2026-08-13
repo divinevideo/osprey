@@ -14,7 +14,7 @@ The contract is deliberately strict -- a JSON object carrying a truthy `success`
 -- and that is safe rather than optimistic. Verified against relay-manager: all
 three endpoints this sink calls return `{"success": true, ...}` with 200, and
 every failure path is non-2xx. There is no 200-with-`success:false` case.
-  /api/relay-rpc      worker/src/index.ts:1178
+  /api/relay-rpc      worker/src/index.ts:1177
   /api/publish        worker/src/index.ts:861
   /api/moderate-media worker/src/index.ts:1806
 A new endpoint that does not follow that shape will fail loudly here, which is

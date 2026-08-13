@@ -64,17 +64,23 @@ def _requests_aliases() -> set[str]:
     """
     aliases = set()
     for node in ast.walk(_TREE):
-        if isinstance(node, ast.ImportFrom) and node.module == 'requests':
+        if isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] in _HTTP_MODULES:
             for a in node.names:
                 aliases.add(a.asname or a.name)
     return aliases
 
 
+# Every module that can issue an HTTP request. Keyed on `requests` alone, this
+# guard was blind to a handler reaching for `httpx.post` or -- more realistically,
+# since it is stdlib and adds no dependency -- `urllib.request.urlopen`.
+_HTTP_MODULES = {'requests', 'httpx', 'urllib', 'http', 'aiohttp', 'urllib3'}
+
+
 def _http_call_nodes(scope: ast.AST) -> list[ast.Call]:
     """Every call that issues an HTTP request, however it is spelled.
 
-    Catches `requests.<anything>(...)`, a bare name imported from requests, and
-    `requests.Session().post(...)` -- where the receiver is itself a Call, so
+    Catches `requests.<anything>(...)`, a bare name imported from an HTTP module,
+    and `requests.Session().post(...)` -- where the receiver is itself a Call, so
     resolving only `ast.Name` receivers (as the first version did) missed it.
     """
     aliases = _requests_aliases()
@@ -90,7 +96,7 @@ def _http_call_nodes(scope: ast.AST) -> list[ast.Call]:
             root = f.value
             while isinstance(root, (ast.Attribute, ast.Call, ast.Subscript)):
                 root = root.func if isinstance(root, ast.Call) else root.value
-            if isinstance(root, ast.Name) and (root.id == 'requests' or root.id in aliases):
+            if isinstance(root, ast.Name) and (root.id in _HTTP_MODULES or root.id in aliases):
                 out.append(n)
     return out
 
@@ -218,4 +224,103 @@ def test_both_halves_of_the_token_are_required_together() -> None:
     src = ast.unparse(_fn('_headers'))
     assert 'CF_ACCESS_CLIENT_ID' in src and 'CF_ACCESS_CLIENT_SECRET' in src, (
         '_headers must read both environment variables'
+    )
+
+
+def test_every_handler_re_raises_rather_than_swallowing() -> None:
+    """The enforcement-correctness invariant, and nothing protected it before.
+
+    `push()` publishes the kind-1985 `auto_hidden` label only after the bans
+    succeed, and relies on `_ban_event` RAISING to skip it. Drop that `raise` and
+    a failed ban logs, returns normally, and the label is signed with Divine's
+    moderation key and broadcast for a ban that never happened. The audit trail
+    then asserts something false, durably and attributably.
+
+    Found by mutation: removing the trailing `raise` from `_ban_event` passed all
+    286 tests, because `_is_swallowed` was only ever applied to `_request`.
+    """
+    handlers = [
+        n for n in _class().body
+        if isinstance(n, ast.FunctionDef) and n.name not in _NON_HANDLERS
+    ]
+    assert handlers, 'no effect handlers found; the exclusion list has probably gone stale'
+    for h in handlers:
+        for node in ast.walk(h):
+            if not isinstance(node, ast.Try):
+                continue
+            for handler in node.handlers:
+                raises = [n for n in ast.walk(handler) if isinstance(n, ast.Raise)]
+                assert raises, (
+                    f'{h.name} catches an exception at line {handler.lineno} without re-raising. '
+                    f'A handler that swallows lets push() proceed to publish an enforcement '
+                    f'label for an action that did not happen.'
+                )
+
+
+def _guard_call() -> ast.Call:
+    for node in ast.walk(_fn('_request')):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id == 'require_json_response':
+            return node
+    raise AssertionError('require_json_response call not found in _request')
+
+
+def test_the_helper_passes_the_response_body_itself_not_a_derived_value() -> None:
+    """Asserts on the ARGUMENT NODE, not on a substring of the source.
+
+    The previous version checked that `resp.text[` did not appear, which is
+    dodged by `body = resp.text` then passing `body[:200]`. Re-adding truncation
+    breaks every call rather than silently passing one, so it is loud -- but this
+    test claims to prevent it, so it should actually prevent it.
+    """
+    body_arg = _guard_call().args[3]
+    assert isinstance(body_arg, ast.Attribute) and body_arg.attr == 'text', (
+        f'the body argument to require_json_response is {type(body_arg).__name__}, not a bare '
+        f'`resp.text`. The guard parses the body, so a slice or a derived value cannot parse '
+        f'and every response would be rejected as malformed.'
+    )
+
+
+def test_the_helper_passes_the_real_content_type() -> None:
+    """A hardcoded '' reduces the guard to body-only without failing anything."""
+    ctype_arg = _guard_call().args[2]
+    assert not isinstance(ctype_arg, ast.Constant), (
+        'the content-type argument is a constant; pass the real response header so the '
+        'content-type branch of the guard is not dead'
+    )
+
+
+def test_the_guard_call_is_not_conditional() -> None:
+    """An `if not os.environ.get('SKIP_...')` wrapper is a swallow by another name.
+
+    `_is_swallowed` looks for try/except and would not see this. A "temporary"
+    debug toggle that survives is a realistic way for the check to stop running.
+    """
+    call_line = _guard_call().lineno
+    for node in ast.walk(_fn('_request')):
+        if isinstance(node, ast.If):
+            body_lines = {
+                n.lineno for stmt in node.body for n in ast.walk(stmt) if hasattr(n, 'lineno')
+            }
+            assert call_line not in body_lines, (
+                f'require_json_response at line {call_line} is inside a conditional at line '
+                f'{node.lineno}; it must run on every request'
+            )
+
+
+def test_each_access_header_carries_its_matching_value() -> None:
+    """Swapped values pass every other check. Copy-paste is the realistic error."""
+    pairs = {}
+    for node in ast.walk(_fn('_headers')):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Subscript):
+            key = ast.unparse(node.targets[0].slice)
+            pairs[key] = ast.unparse(node.value)
+    assert pairs.get("'CF-Access-Client-Id'") == 'client_id', (
+        f"CF-Access-Client-Id is assigned {pairs.get(chr(39) + 'CF-Access-Client-Id' + chr(39))!r}, "
+        f'expected the client id'
+    )
+    assert pairs.get("'CF-Access-Client-Secret'") == 'client_secret', (
+        f"CF-Access-Client-Secret is assigned "
+        f"{pairs.get(chr(39) + 'CF-Access-Client-Secret' + chr(39))!r}, expected the client secret"
     )
