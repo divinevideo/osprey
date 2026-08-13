@@ -52,6 +52,11 @@ class RelayManagerSink(BaseOutputSink):
         worker (e.g. ``https://api-relay-prod.divine.video``).
       - ``DIVINE_RELAY_MANAGER_API_KEY``: Required. Value for the ``X-Admin-Key``
         header. Must match the ``ADMIN_API_KEY`` secret on the target worker.
+      - ``CF_ACCESS_CLIENT_ID`` / ``CF_ACCESS_CLIENT_SECRET``: Required wherever
+        relay-manager sits behind an edge authenticator, which is every deployed
+        environment. Set **both or neither**. Without them the request never
+        reaches relay-manager: the edge answers with an auth page carrying a 2xx,
+        which is why ``_request`` checks the body rather than the status alone.
     """
 
     timeout: float = 5.0
