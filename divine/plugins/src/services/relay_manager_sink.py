@@ -69,6 +69,23 @@ class RelayManagerSink(BaseOutputSink):
             logger.warning('DIVINE_RELAY_MANAGER_URL not set. RelayManagerSink will skip all effects.')
         if not self._api_key:
             logger.warning('DIVINE_RELAY_MANAGER_API_KEY not set. Requests will fail auth.')
+        # A HALF-configured edge token is the dangerous state: neither half set is
+        # correct for local dev, and both set is correct everywhere deployed, but
+        # exactly one -- a typo'd secretKey, a partial ExternalSecret sync -- boots
+        # looking identical to local dev while every enforcement call is refused
+        # by the edge. Say so at startup rather than leaving it to be inferred
+        # from failures later.
+        cf_id = bool(os.environ.get('CF_ACCESS_CLIENT_ID', '').strip())
+        cf_secret = bool(os.environ.get('CF_ACCESS_CLIENT_SECRET', '').strip())
+        if cf_id != cf_secret:
+            present = 'CF_ACCESS_CLIENT_ID' if cf_id else 'CF_ACCESS_CLIENT_SECRET'
+            missing = 'CF_ACCESS_CLIENT_SECRET' if cf_id else 'CF_ACCESS_CLIENT_ID'
+            logger.warning(
+                '%s is set but %s is not. The edge service token is sent only as a pair, so '
+                'no token will be sent and every enforcement call will be refused.',
+                present,
+                missing,
+            )
 
     def _headers(self) -> dict[str, str]:
         h: dict[str, str] = {'Content-Type': 'application/json'}
@@ -101,7 +118,10 @@ class RelayManagerSink(BaseOutputSink):
         # raise_for_status cannot see a 2xx that is not the API. An unauthenticated
         # request to an edge-protected endpoint comes back 200 with an auth page,
         # and treating that as success is what made enforcement silent.
-        require_json_response(url, resp.status_code, resp.headers.get('Content-Type', ''), resp.text[:200])
+        # Full body, NOT a prefix: the guard parses it, and a truncated body can
+        # never parse, so slicing here would reject every response as malformed.
+        # The guard bounds the excerpt it puts in the message itself.
+        require_json_response(url, resp.status_code, resp.headers.get('Content-Type', ''), resp.text)
 
     def will_do_work(self, result: ExecutionResult) -> bool:
         if not self._url:
