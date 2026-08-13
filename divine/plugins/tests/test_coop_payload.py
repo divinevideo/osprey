@@ -22,6 +22,9 @@ source, and the test was confirmed to fail. A characterisation test that cannot
 fail pins nothing.
 """
 
+import ast
+from pathlib import Path
+
 import pytest
 from coop_payload import build_content_fields
 
@@ -44,6 +47,7 @@ def build(features=None, **kw):
 
 
 # --- the always-present base -------------------------------------------------
+
 
 def test_base_fields_are_always_present_even_with_no_features():
     got = build({})
@@ -81,6 +85,7 @@ def test_kind_and_created_at_pass_through_unchanged():
 
 
 # --- conditional fields: falsy is OMITTED, not sent empty ---------------------
+
 
 @pytest.mark.parametrize(
     'feature,field',
@@ -160,8 +165,12 @@ def test_detector_builds_media_url_from_the_trusted_base_and_content_id():
 
 def test_detector_overrides_label_namespace_and_value():
     got = build(
-        {'DetectorContentHash': EVENT, 'DetectorClass': 'nudity',
-         'LabelNamespace': 'from-the-label', 'LabelValue': 'from-the-label'},
+        {
+            'DetectorContentHash': EVENT,
+            'DetectorClass': 'nudity',
+            'LabelNamespace': 'from-the-label',
+            'LabelValue': 'from-the-label',
+        },
         action_name=DETECTOR,
     )
     assert got['label_namespace'] == 'content-warning'
@@ -199,21 +208,32 @@ def test_non_detector_actions_never_get_a_media_url_here():
 
 # --- a full production-shaped report -----------------------------------------
 
+
 def test_a_fully_populated_report_produces_the_expected_field_set():
     """Locks the whole shape, so an added or removed field is visible as a diff
     rather than being noticed only in Coop."""
-    got = build({
-        'Kind': 34236,
-        'CreatedAt': 1786637235,
-        'ReportReason': 'nudity',
-        'ReportedPubkey': AUTHOR,
-        'ReportedEventId': EVENT,
-        'NoteText': 'six second loop, kitchen dance',
-    })
+    got = build(
+        {
+            'Kind': 34236,
+            'CreatedAt': 1786637235,
+            'ReportReason': 'nudity',
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': EVENT,
+            'NoteText': 'six second loop, kitchen dance',
+        }
+    )
     assert set(got) == {
-        'event_id', 'source_event_id', 'pubkey', 'kind', 'created_at',
-        'verdict', 'action_name', 'report_reason', 'reported_pubkey',
-        'reported_event_id', 'text',
+        'event_id',
+        'source_event_id',
+        'pubkey',
+        'kind',
+        'created_at',
+        'verdict',
+        'action_name',
+        'report_reason',
+        'reported_pubkey',
+        'reported_event_id',
+        'text',
     }
 
 
@@ -230,28 +250,22 @@ def test_a_fully_populated_report_produces_the_expected_field_set():
 # So a wrong keyword name would pass every test above and fail on the first real
 # event. This checks it statically, which is the one technique available.
 
-import ast
-from pathlib import Path
-
 _SINK = Path(__file__).resolve().parents[1] / 'src' / 'services' / 'coop_sink.py'
 _MODULE = Path(__file__).resolve().parents[1] / 'src' / 'coop_payload.py'
 
 
 def _signature():
     tree = ast.parse(_MODULE.read_text())
-    fn = next(
-        n for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == 'build_content_fields'
-    )
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'build_content_fields')
     return fn
 
 
 def _call_site():
     tree = ast.parse(_SINK.read_text())
     calls = [
-        n for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-        and n.func.id == 'build_content_fields'
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'build_content_fields'
     ]
     assert len(calls) == 1, f'expected exactly one call site, found {len(calls)}'
     return calls[0]
@@ -283,6 +297,4 @@ def test_the_sink_passes_features_positionally():
     """The one positional parameter. If it ever moves to a keyword, this fails
     loudly rather than the call silently binding it to something else."""
     call = _call_site()
-    assert len(call.args) == 1, (
-        f'expected features passed positionally, found {len(call.args)} positional args'
-    )
+    assert len(call.args) == 1, f'expected features passed positionally, found {len(call.args)} positional args'
