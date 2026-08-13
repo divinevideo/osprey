@@ -1,0 +1,217 @@
+"""Characterisation tests: pins what COOPSink sends to Coop TODAY.
+
+These do not describe desired behaviour. They describe **current** behaviour, so
+that the `/content` -> `/report` split has something to break against. If one of
+these fails after a change, that is the point: decide whether the change was
+intended, then update the test deliberately.
+
+Why the payload builder is a separate module at all: `coop_sink.py` imports
+gevent, requests, sentry_sdk and the osprey engine, and the plugin test step
+installs pytest and websocket-client only. So the sink cannot be imported here and
+its payload could not be asserted on at all. Pulling the pure part out follows the
+pattern already used by `media_hash.py`, `reported_author.py`,
+`trusted_moderation.py` and `response_guard.py` -- logic lifted out of a sink
+precisely so it can be tested.
+
+The I/O stays in the sink: the media lookup mutates the returned dict afterwards,
+and the POST is unchanged. This module is only the part that turns features into
+fields.
+
+Each test below was mutation-checked: the behaviour it pins was changed in the
+source, and the test was confirmed to fail. A characterisation test that cannot
+fail pins nothing.
+"""
+
+import pytest
+from coop_payload import build_content_fields
+
+AUTHOR = 'bc02e0a6c0f01ad9cb57a2b0f8ef8241bc5ff979ce4452ce9e243de457756725'
+REPORTER = '19f9afb8f855f5e86b5bea160e78ec5871648b10dedb043f4806fca8ce50e4d3'
+EVENT = '3f8a1c9e77b24d6e05a4c3b81f9e2d70a6c5b4938e7f1a2d0c9b8a7f6e5d4c3b'
+WRAPPER = '9d1e4f7a3b8c2059e6f4a1d3c7b092e58a4f6d1c3e9b7a250f8c6d4b2a1e3f90'
+MEDIA_BASE = 'https://media.divine.video'
+
+
+def build(features=None, **kw):
+    """Call with today's defaults, overridable per test."""
+    kw.setdefault('content_id', EVENT)
+    kw.setdefault('wrapper_event_id', WRAPPER)
+    kw.setdefault('author', AUTHOR)
+    kw.setdefault('verdict', 'flag_for_review')
+    kw.setdefault('action_name', 'nostr_kind_1984')
+    kw.setdefault('media_base_url', MEDIA_BASE)
+    return build_content_fields(features or {}, **kw)
+
+
+# --- the always-present base -------------------------------------------------
+
+def test_base_fields_are_always_present_even_with_no_features():
+    got = build({})
+    assert got['event_id'] == EVENT
+    assert got['source_event_id'] == WRAPPER
+    assert got['pubkey'] == AUTHOR
+    assert got['verdict'] == 'flag_for_review'
+    assert got['action_name'] == 'nostr_kind_1984'
+    # Present as keys even when the feature is absent, carrying None.
+    assert 'kind' in got and got['kind'] is None
+    assert 'created_at' in got and got['created_at'] is None
+
+
+def test_pubkey_is_the_resolved_author_not_the_reporter():
+    """The single most consequential field. It becomes Coop's creator, which
+    drives Unban-User / Unsuspend-User, so naming the reporter here would point
+    reversals at the wrong person."""
+    got = build({'ReportedPubkey': REPORTER}, author=AUTHOR)
+    assert got['pubkey'] == AUTHOR
+    assert got['reported_pubkey'] == REPORTER
+
+
+def test_an_unresolved_author_is_carried_as_empty_string_not_dropped():
+    """Author resolution fails closed. The empty string must still be SENT, so
+    Coop records no creator and the adapter refuses loudly, rather than the key
+    going missing and the value being inferred downstream."""
+    got = build({}, author='')
+    assert got['pubkey'] == ''
+
+
+def test_kind_and_created_at_pass_through_unchanged():
+    got = build({'Kind': 34236, 'CreatedAt': 1786637235})
+    assert got['kind'] == 34236
+    assert got['created_at'] == 1786637235
+
+
+# --- conditional fields: falsy is OMITTED, not sent empty ---------------------
+
+@pytest.mark.parametrize(
+    'feature,field',
+    [
+        ('ReportReason', 'report_reason'),
+        ('ReportedPubkey', 'reported_pubkey'),
+        ('LabelValue', 'label_value'),
+        ('LabelNamespace', 'label_namespace'),
+    ],
+)
+def test_optional_fields_are_included_when_truthy(feature, field):
+    got = build({feature: 'x'})
+    assert got[field] == 'x'
+
+
+@pytest.mark.parametrize(
+    'feature,field',
+    [
+        ('ReportReason', 'report_reason'),
+        ('ReportedPubkey', 'reported_pubkey'),
+        ('ReportedEventId', 'reported_event_id'),
+        ('LabelValue', 'label_value'),
+        ('LabelNamespace', 'label_namespace'),
+        ('NoteText', 'text'),
+    ],
+)
+def test_optional_fields_are_omitted_when_absent(feature, field):
+    assert field not in build({})
+
+
+@pytest.mark.parametrize(
+    'feature,field',
+    [
+        ('ReportReason', 'report_reason'),
+        ('ReportedPubkey', 'reported_pubkey'),
+        ('LabelValue', 'label_value'),
+        ('NoteText', 'text'),
+    ],
+)
+def test_optional_fields_are_omitted_when_empty_string(feature, field):
+    """Guarded on truthiness, not presence. An empty string is dropped entirely
+    rather than sent as ''. Coop then shows no row instead of a blank one."""
+    assert field not in build({feature: ''})
+
+
+def test_note_text_becomes_the_text_field():
+    got = build({'NoteText': 'six second loop'})
+    assert got['text'] == 'six second loop'
+
+
+def test_reported_event_id_is_coerced_to_string():
+    """Alone among the optional fields, this one is str()-wrapped: it arrives
+    from a report's e-tag and is not guaranteed to be a string."""
+    got = build({'ReportedEventId': 12345})
+    assert got['reported_event_id'] == '12345'
+    assert isinstance(got['reported_event_id'], str)
+
+
+def test_reported_event_id_zero_is_omitted_not_sent_as_string_zero():
+    """Consequence of the truthiness guard, pinned because it is surprising."""
+    assert 'reported_event_id' not in build({'ReportedEventId': 0})
+
+
+# --- the AI-detector branch --------------------------------------------------
+
+DETECTOR = 'ai_detector_nsfw'
+
+
+def test_detector_builds_media_url_from_the_trusted_base_and_content_id():
+    """Never the caller-supplied URL carried in the Action for diagnostics."""
+    got = build(
+        {'DetectorContentHash': EVENT, 'DetectorVideoUrl': 'https://evil.example/x.mp4'},
+        action_name=DETECTOR,
+    )
+    assert got['media_url'] == f'{MEDIA_BASE}/{EVENT}'
+
+
+def test_detector_overrides_label_namespace_and_value():
+    got = build(
+        {'DetectorContentHash': EVENT, 'DetectorClass': 'nudity',
+         'LabelNamespace': 'from-the-label', 'LabelValue': 'from-the-label'},
+        action_name=DETECTOR,
+    )
+    assert got['label_namespace'] == 'content-warning'
+    assert got['label_value'] == 'nudity'
+
+
+def test_detector_defaults_class_confidence_and_model():
+    got = build({'DetectorContentHash': EVENT}, action_name=DETECTOR)
+    assert got['label_value'] == 'nsfw'
+    assert got['confidence'] == 0
+    assert got['model'] == ''
+
+
+def test_detector_branch_requires_the_hash_to_MATCH_the_content_id():
+    """Both conditions, not either. A detector action whose hash names different
+    bytes than the item must not get a playable URL built for the item."""
+    got = build({'DetectorContentHash': 'a' * 64}, action_name=DETECTOR)
+    assert 'media_url' not in got
+    assert 'confidence' not in got
+
+
+def test_detector_branch_does_not_fire_for_other_actions():
+    got = build({'DetectorContentHash': EVENT}, action_name='nostr_kind_1984')
+    assert 'media_url' not in got
+    assert 'model' not in got
+
+
+def test_non_detector_actions_never_get_a_media_url_here():
+    """Media for reports and labels is resolved later, from the relay, by the
+    sink. This function must not invent one."""
+    got = build({'Kind': 34236, 'NoteText': 'a video'})
+    assert 'media_url' not in got
+    assert 'media_thumbnail' not in got
+
+
+# --- a full production-shaped report -----------------------------------------
+
+def test_a_fully_populated_report_produces_the_expected_field_set():
+    """Locks the whole shape, so an added or removed field is visible as a diff
+    rather than being noticed only in Coop."""
+    got = build({
+        'Kind': 34236,
+        'CreatedAt': 1786637235,
+        'ReportReason': 'nudity',
+        'ReportedPubkey': AUTHOR,
+        'ReportedEventId': EVENT,
+        'NoteText': 'six second loop, kitchen dance',
+    })
+    assert set(got) == {
+        'event_id', 'source_event_id', 'pubkey', 'kind', 'created_at',
+        'verdict', 'action_name', 'report_reason', 'reported_pubkey',
+        'reported_event_id', 'text',
+    }
