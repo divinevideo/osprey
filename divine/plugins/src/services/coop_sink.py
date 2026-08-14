@@ -4,6 +4,7 @@ from typing import Any
 import gevent
 import requests
 import sentry_sdk
+from coop_payload import build_content_fields
 from coop_profile import profile_fields
 from funnelcake_profile import fetch_profile
 from osprey.engine.executor.execution_context import ExecutionResult
@@ -127,42 +128,15 @@ class COOPSink(BaseOutputSink):
         # enforcement adapter refuses loudly instead of acting on a guess.
         author = author_for_features(features)
 
-        content: dict[str, Any] = {
-            'event_id': content_id,
-            'source_event_id': wrapper_event_id,
-            # Describes event_id, not source_event_id. The wrapper's own signer
-            # is not carried here; `reported_pubkey` below keeps the reporter's
-            # unverified claim, clearly labelled as a claim.
-            'pubkey': author,
-            'kind': features.get('Kind'),
-            'created_at': features.get('CreatedAt'),
-            'verdict': verdict.verdict,
-            'action_name': result.action.action_name,
-        }
-
-        if features.get('ReportReason'):
-            content['report_reason'] = features['ReportReason']
-        if features.get('ReportedPubkey'):
-            content['reported_pubkey'] = features['ReportedPubkey']
-        if features.get('ReportedEventId'):
-            content['reported_event_id'] = str(features['ReportedEventId'])
-        if features.get('LabelValue'):
-            content['label_value'] = features['LabelValue']
-        if features.get('LabelNamespace'):
-            content['label_namespace'] = features['LabelNamespace']
-        if features.get('NoteText'):
-            content['text'] = features['NoteText']
-
-        # Detector Actions are keyed on the SHA-256 computed from fetched
-        # bytes, not on a Nostr event id. Build the playable URL from that
-        # validated identity and a trusted base; never pass through the
-        # caller-controlled URL carried for diagnostics in the Action.
-        if result.action.action_name == 'ai_detector_nsfw' and features.get('DetectorContentHash') == content_id:
-            content['media_url'] = f'{self._media_base_url}/{content_id}'
-            content['label_namespace'] = 'content-warning'
-            content['label_value'] = features.get('DetectorClass', 'nsfw')
-            content['confidence'] = features.get('DetectorConfidence', 0)
-            content['model'] = features.get('DetectorModel', '')
+        content = build_content_fields(
+            features,
+            content_id=content_id,
+            wrapper_event_id=wrapper_event_id,
+            author=author,
+            verdict=verdict.verdict,
+            action_name=result.action.action_name,
+            media_base_url=self._media_base_url,
+        )
 
         # Resolve the reported content's playable media so the MRT can show the video
         # under review. content_id is the moderated event's id, but a report/label event
