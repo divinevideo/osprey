@@ -4,6 +4,8 @@ from typing import Any
 import gevent
 import requests
 import sentry_sdk
+from coop_profile import profile_fields
+from funnelcake_profile import fetch_profile
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.engine.language_types.verdicts import VerdictEffect
 from osprey.worker.lib.osprey_shared.logging import get_logger
@@ -55,6 +57,10 @@ class COOPSink(BaseOutputSink):
         self._content_type = os.environ.get('DIVINE_COOP_CONTENT_TYPE', 'nostr_event')
         self._relay_ws_url = os.environ.get('DIVINE_RELAY_WS_URL', '')
         self._media_base_url = os.environ.get('DIVINE_MEDIA_BASE_URL', 'https://media.divine.video').rstrip('/')
+        # Reuses the variable resolve_event_author already reads, rather than adding a
+        # second name for the same funnelcake API. Unset disables profile enrichment,
+        # exactly as an unset DIVINE_RELAY_WS_URL disables media.
+        self._relay_api_url = os.environ.get('DIVINE_RELAY_API_URL', '').rstrip('/')
 
         if not self._url:
             logger.info('DIVINE_COOP_URL not set. COOPSink disabled.')
@@ -179,6 +185,41 @@ class COOPSink(BaseOutputSink):
             except Exception:
                 # Media is best-effort enrichment; never let it block a review submission.
                 logger.exception('COOP media lookup failed for %s; submitting without media', content_id)
+
+        # Put PEOPLE on the card, not 64 hex characters. Author, reported and reporter
+        # each get their own namespaced fields so one person's identity is never shown
+        # against another's actions.
+        #
+        # Deduplicated by pubkey: on a report the author and the reported user are
+        # usually the same account, so this is one call in the common case rather than
+        # three per item.
+        #
+        # Fail-open like the media lookup -- enrichment must never drop a review item.
+        # But NOT silently: funnelcake answers 200 with a null profile for an unknown
+        # pubkey, so a blank name would read as "this user has no profile" when it may
+        # mean "we could not ask". profile_fields carries that distinction as a field.
+        if self._relay_api_url:
+            seen: dict[str, tuple[Any, Any]] = {}
+            for prefix, pubkey in (
+                ('author', author),
+                ('reported', features.get('ReportedPubkey', '')),
+                ('reporter', features.get('Pubkey', '')),
+            ):
+                if not pubkey:
+                    continue
+                if pubkey not in seen:
+                    profile_deadline = gevent.Timeout(self.media_timeout)
+                    try:
+                        with profile_deadline:
+                            seen[pubkey] = fetch_profile(self._relay_api_url, pubkey, timeout=self.media_timeout)
+                    except gevent.Timeout as profile_timeout_exc:
+                        if profile_timeout_exc is not profile_deadline:
+                            raise  # the sink-level timeout; MultiOutputSink owns it
+                        seen[pubkey] = (None, f'timed out after {self.media_timeout}s')
+                    except Exception as exc:  # noqa: BLE001
+                        seen[pubkey] = (None, f'{type(exc).__name__}: {exc}')
+                body, error = seen[pubkey]
+                content.update(profile_fields(body, prefix=prefix, error=error))
 
         payload: dict[str, Any] = {
             'contentId': content_id,
