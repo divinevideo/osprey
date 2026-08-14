@@ -79,11 +79,18 @@ def profile_fields(
         out[f'{prefix}_display_name'] = display
 
     if profile.get('nip05'):
-        out[f'{prefix}_nip05'] = profile['nip05']
-        # Sent even when False, and NOT omitted as falsy: an unverified nip05 shown
-        # indistinguishably from a verified one lets an impersonator borrow a trusted
-        # identity on the moderator's own screen. Absent would read as "no claim".
-        out[f'{prefix}_nip05_verified'] = bool(profile.get('nip05_verified'))
+        verified = bool(profile.get('nip05_verified'))
+        # The status is folded INTO the string, deliberately. Coop has two renderers:
+        # the review card shows every declared field, but the queue preview uses
+        # getPrimaryContentFields, which filters to STRING/URL/media and drops
+        # BOOLEAN (client/src/utils/itemUtils.ts:112-118). A separate boolean would
+        # be invisible exactly where a moderator scans fastest -- they would read a
+        # bare 'sam@divine.video' as an established identity when it is an unverified
+        # claim anyone can make. A single string cannot be separated from itself.
+        out[f'{prefix}_nip05'] = f'{profile["nip05"]} ({"verified" if verified else "UNVERIFIED"})'
+        # Kept alongside for machine use (rules, exports). Sent even when False, so
+        # absent means "no nip05 claimed" rather than "claimed but unverified".
+        out[f'{prefix}_nip05_verified'] = verified
 
     social = response.get('social') or {}
     if social.get('follower_count') is not None:

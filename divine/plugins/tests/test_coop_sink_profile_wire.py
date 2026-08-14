@@ -144,7 +144,9 @@ def test_the_moderator_gets_a_name_not_just_hex(sink):
     captured = _drive(sink, {'Kind': 1984, 'ReportedAuthorPubkey': AUTHOR, 'EventId': WRAPPER_ID})
     content = captured['payload']['content']
     assert content['author_display_name'] == 'Six Second Sam'
-    assert content['author_nip05'] == 'sam@divine.video'
+    # Status folded in: the queue preview drops BOOLEAN fields, so a separate
+    # verified flag would be invisible there. See coop_profile.profile_fields.
+    assert content['author_nip05'] == 'sam@divine.video (verified)'
     assert content['author_profile_state'] == 'resolved'
 
 
@@ -215,3 +217,88 @@ def test_no_funnelcake_url_means_no_lookup_and_no_profile_fields(sink):
     _drive(sink, {'Kind': 1984, 'ReportedAuthorPubkey': AUTHOR, 'EventId': WRAPPER_ID})
     assert captured['calls'] == []
     assert not any(k.endswith('_profile_state') for k in captured['payload']['content'])
+
+
+def test_the_REPORTED_account_is_the_reporters_claim_not_the_verified_author(sink):
+    """The gap a review found: no test drove the `reported` branch at all, so three
+    mutations survived -- including binding `reported` to the verified author.
+
+    These are different facts and a moderator acts on the difference. `author` is who
+    actually signed the content; `reported` is who the reporter SAYS is responsible.
+    Showing the verified identity under the label of an unverified claim is the same
+    class of error as the reporter-as-creator regression, one field over.
+    """
+    _, _, profiles = sink
+    CLAIMED = 'c0ffee11deadbeef2222333344445555666677778888999900001111222233ff'
+    profiles[AUTHOR] = {'pubkey': AUTHOR, 'profile': {'display_name': 'Actual Author'}}
+    profiles[CLAIMED] = {'pubkey': CLAIMED, 'profile': {'display_name': 'Accused Party'}}
+    captured = _drive(
+        sink,
+        {
+            'Kind': 1984,
+            'ReportedAuthorPubkey': AUTHOR,
+            'ReportedPubkey': CLAIMED,
+            'Pubkey': REPORTER,
+            'EventId': WRAPPER_ID,
+        },
+    )
+    content = captured['payload']['content']
+    assert content['author_display_name'] == 'Actual Author'
+    assert content['reported_display_name'] == 'Accused Party'
+    assert content['author_display_name'] != content['reported_display_name']
+
+
+def test_a_reporter_controlled_pubkey_cannot_steer_the_lookup_URL(sink):
+    """`ReportedPubkey` is the first p-tag of a report -- reporter-controlled -- and is
+    interpolated into a URL path. requests normalises dot segments, so an unvalidated
+    value redirects an in-cluster GET to an arbitrary funnelcake path and puts the URL
+    in a moderator-visible error field. Must never reach the fetcher."""
+    _, captured, _ = sink
+    _drive(
+        sink,
+        {
+            'Kind': 1984,
+            'ReportedAuthorPubkey': AUTHOR,
+            'ReportedPubkey': '../../api/admin/purge',
+            'EventId': WRAPPER_ID,
+        },
+    )
+    assert not any('admin' in c or '..' in c for c in captured['calls']), (
+        f'a crafted p-tag reached the fetcher: {captured["calls"]}'
+    )
+    content = captured['payload']['content']
+    assert content['reported_profile_state'] == 'lookup_failed'
+
+
+def test_the_push_budget_covers_every_hop_it_now_has(sink):
+    """A review found that adding profile lookups without raising this budget made a
+    slow-but-working funnelcake DROP review items: MultiOutputSink wraps push() in
+    gevent.Timeout(sink.timeout) with max_retries 0, so overrunning is a drop, not a
+    degraded submission. The fix has to stay fixed, hence arithmetic rather than
+    prose -- reverting the formula previously passed the entire suite.
+
+    Profile lookups share ONE deadline, so the worst case is media + profiles + POST
+    regardless of how many distinct pubkeys an item carries.
+    """
+    module, _, _ = sink
+    s = module.COOPSink()
+    worst_case = s.media_timeout + s.profile_timeout + s.coop_timeout
+    assert s.timeout > worst_case, (
+        f'push budget {s.timeout}s cannot cover media {s.media_timeout} + profiles '
+        f'{s.profile_timeout} + POST {s.coop_timeout} = {worst_case}s; a slow '
+        f'dependency would drop the item rather than submit it unenriched'
+    )
+
+
+def test_a_malformed_pubkey_says_WHY_rather_than_looking_like_a_dead_lookup(sink):
+    """Distinct from a funnelcake failure. 'not a 64-char hex pubkey' tells a moderator
+    the report itself carried a bad p-tag; 'lookup did not complete' would blame our
+    infrastructure for the reporter's malformed input."""
+    _, _, _ = sink
+    captured = _drive(
+        sink,
+        {'Kind': 1984, 'ReportedAuthorPubkey': AUTHOR, 'ReportedPubkey': 'not-a-pubkey', 'EventId': WRAPPER_ID},
+    )
+    content = captured['payload']['content']
+    assert content['reported_profile_state'] == 'lookup_failed'
+    assert 'hex' in content['reported_profile_error']

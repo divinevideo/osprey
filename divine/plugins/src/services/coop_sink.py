@@ -10,7 +10,7 @@ from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.engine.language_types.verdicts import VerdictEffect
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
-from reported_author import author_for_features, content_id_for_features
+from reported_author import _hex64, author_for_features, content_id_for_features
 
 from .nostr_media import fetch_event_media
 
@@ -49,7 +49,11 @@ class COOPSink(BaseOutputSink):
     # Derived rather than hardcoded because it has to cover both hops: share one budget
     # between them and a slow relay eats the POST's part, gevent kills the greenlet, and
     # the item is dropped (max_retries is 0) instead of merely submitted without media.
-    timeout: float = media_timeout + coop_timeout + 1.0
+    # ONE budget for ALL profile lookups combined, not one each. Per-lookup would make
+    # the worst case scale with the number of distinct pubkeys on an item, which is
+    # exactly what the derived total below cannot absorb.
+    profile_timeout: float = 3.0
+    timeout: float = media_timeout + profile_timeout + coop_timeout + 1.0
 
     def __init__(self) -> None:
         self._url = os.environ.get('DIVINE_COOP_URL', '')
@@ -200,6 +204,44 @@ class COOPSink(BaseOutputSink):
         # mean "we could not ask". profile_fields carries that distinction as a field.
         if self._relay_api_url:
             seen: dict[str, tuple[Any, Any]] = {}
+            # One deadline around the WHOLE set. Per-lookup deadlines would let N
+            # distinct pubkeys consume N * profile_timeout and eat the POST's share of
+            # the push budget, which drops the item outright (max_retries is 0) rather
+            # than submitting it unenriched. That is the failure this whole block is
+            # supposed to be incapable of.
+            profile_deadline = gevent.Timeout(self.profile_timeout)
+            try:
+                with profile_deadline:
+                    for pubkey in (
+                        author,
+                        features.get('ReportedPubkey', ''),
+                        features.get('Pubkey', ''),
+                    ):
+                        # Validate BEFORE the fetch: `ReportedPubkey` is the first p-tag
+                        # of a report, i.e. reporter-controlled, and it is interpolated
+                        # into a URL path. requests normalises dot segments, so an
+                        # unvalidated value steers an in-cluster GET to an arbitrary
+                        # funnelcake path and lands the URL in a moderator-visible error
+                        # field. reported_author.py:118-120 already settled this.
+                        if pubkey and _hex64(pubkey) and pubkey not in seen:
+                            # Caught per pubkey, INSIDE the shared deadline. The deadline
+                            # bounds total time; this keeps each failure's own reason,
+                            # which is the difference between a card saying 'HTTP 500
+                            # Unable To Extract Key!' -- the rate limiter, actionable --
+                            # and a generic 'something went wrong'.
+                            try:
+                                seen[pubkey] = fetch_profile(self._relay_api_url, pubkey, timeout=self.profile_timeout)
+                            except gevent.Timeout:
+                                raise  # the shared deadline; handled below
+                            except Exception as exc:  # noqa: BLE001
+                                seen[pubkey] = (None, f'{type(exc).__name__}: {exc}')
+            except gevent.Timeout as profile_timeout_exc:
+                if profile_timeout_exc is not profile_deadline:
+                    raise  # the sink-level timeout; MultiOutputSink owns it
+                logger.warning('COOP profile lookups timed out; submitting with what resolved')
+            except Exception:
+                logger.exception('COOP profile lookup failed; submitting without profiles')
+
             for prefix, pubkey in (
                 ('author', author),
                 ('reported', features.get('ReportedPubkey', '')),
@@ -207,18 +249,10 @@ class COOPSink(BaseOutputSink):
             ):
                 if not pubkey:
                     continue
-                if pubkey not in seen:
-                    profile_deadline = gevent.Timeout(self.media_timeout)
-                    try:
-                        with profile_deadline:
-                            seen[pubkey] = fetch_profile(self._relay_api_url, pubkey, timeout=self.media_timeout)
-                    except gevent.Timeout as profile_timeout_exc:
-                        if profile_timeout_exc is not profile_deadline:
-                            raise  # the sink-level timeout; MultiOutputSink owns it
-                        seen[pubkey] = (None, f'timed out after {self.media_timeout}s')
-                    except Exception as exc:  # noqa: BLE001
-                        seen[pubkey] = (None, f'{type(exc).__name__}: {exc}')
-                body, error = seen[pubkey]
+                if not _hex64(pubkey):
+                    content.update(profile_fields(None, prefix=prefix, error='not a 64-char hex pubkey'))
+                    continue
+                body, error = seen.get(pubkey, (None, 'lookup did not complete'))
                 content.update(profile_fields(body, prefix=prefix, error=error))
 
         payload: dict[str, Any] = {

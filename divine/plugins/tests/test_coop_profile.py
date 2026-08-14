@@ -33,7 +33,7 @@ def test_a_resolved_profile_gives_the_moderator_a_name():
         prefix='author',
     )
     assert got['author_display_name'] == 'Six Second Sam'
-    assert got['author_nip05'] == 'sam@divine.video'
+    assert got['author_nip05'] == 'sam@divine.video (verified)'
     assert got['author_profile_state'] == 'resolved'
 
 
@@ -64,8 +64,23 @@ def test_an_unverified_nip05_is_not_presented_as_verified():
         },
         prefix='author',
     )
-    assert got['author_nip05'] == 'sam@divine.video'
+    # The STATUS TRAVELS INSIDE THE STRING, and that is not cosmetic. Coop has two
+    # renderers: the review card shows every declared field, but the queue preview
+    # uses getPrimaryContentFields, which filters to STRING/URL/media and DROPS
+    # BOOLEAN. A separate boolean flag would therefore be invisible exactly where a
+    # moderator scans quickly -- they would see a bare 'sam@divine.video' with no
+    # hint it is an unverified claim. One field cannot be separated from itself.
+    assert got['author_nip05'] == 'sam@divine.video (UNVERIFIED)'
     assert got['author_nip05_verified'] is False
+
+
+def test_a_verified_nip05_is_marked_verified_in_the_string_too():
+    got = profile_fields(
+        {'pubkey': PUBKEY, 'profile': {'nip05': 'sam@divine.video', 'nip05_verified': True}},
+        prefix='author',
+    )
+    assert got['author_nip05'] == 'sam@divine.video (verified)'
+    assert got['author_nip05_verified'] is True
 
 
 @pytest.mark.parametrize('prefix', ['author', 'reported', 'reporter'])
