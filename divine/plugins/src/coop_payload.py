@@ -37,6 +37,7 @@ def build_content_fields(
     verdict: str,
     action_name: str,
     media_base_url: str,
+    user_type_id: str = '',
 ) -> dict[str, Any]:
     """Build the `content` object for a Coop item submission.
 
@@ -52,6 +53,9 @@ def build_content_fields(
         verdict: The verdict string.
         action_name: Osprey action name; selects the detector branch below.
         media_base_url: Trusted base for detector media URLs.
+        user_type_id: Coop's `nostr_user` item type id, from DIVINE_COOP_USER_TYPE_ID.
+            Empty when iac has not plumbed it yet, in which case the `author` field is
+            omitted rather than guessed.
 
     Returns:
         The content fields. The caller may add `media_url` / `media_thumbnail`
@@ -92,6 +96,19 @@ def build_content_fields(
     # never pass through the caller-controlled URL carried for diagnostics in the
     # Action. Requires BOTH the detector action AND the hash naming this very
     # item, so a detector result about different bytes cannot attach a URL here.
+    # Coop's `author` is a RELATED_ITEM and `creatorId` points at it. Without it the
+    # Associated User panel does not render, so Ban/Suspend/Unban/Unsuspend-User cannot be
+    # exercised at all -- half of moderation, silently missing.
+    #
+    # `pubkey` above cannot carry the role: it is STRING-typed, and Coop rejects a STRING
+    # field in a RELATED_ITEM role.
+    #
+    # EMIT OR OMIT, never a placeholder. Coop 400s the WHOLE submission when a RELATED_ITEM
+    # carries an empty id, so an unresolved author must drop the key. Losing one item's
+    # account panel is recoverable; losing the item is not.
+    if author and user_type_id:
+        content['author'] = {'id': author, 'typeId': user_type_id}
+
     if action_name == DETECTOR_ACTION and features.get('DetectorContentHash') == content_id:
         content['media_url'] = f'{media_base_url}/{content_id}'
         content['label_namespace'] = 'content-warning'

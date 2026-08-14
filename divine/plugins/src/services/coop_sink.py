@@ -55,6 +55,10 @@ class COOPSink(BaseOutputSink):
         self._api_key = os.environ.get('DIVINE_COOP_API_KEY', '')
         self._content_type = os.environ.get('DIVINE_COOP_CONTENT_TYPE', 'nostr_event')
         self._relay_ws_url = os.environ.get('DIVINE_RELAY_WS_URL', '')
+        # Coop's nostr_user item type id. Without it the `author` RELATED_ITEM cannot be
+        # built, and a guessed typeId would be rejected for every submission -- so it is
+        # omitted rather than guessed. Plumbed by iac; see the account-moderation steps.
+        self._user_type_id = os.environ.get('DIVINE_COOP_USER_TYPE_ID', '')
         self._media_base_url = os.environ.get('DIVINE_MEDIA_BASE_URL', 'https://media.divine.video').rstrip('/')
 
         if not self._url:
@@ -126,6 +130,7 @@ class COOPSink(BaseOutputSink):
             verdict=verdict.verdict,
             action_name=result.action.action_name,
             media_base_url=self._media_base_url,
+            user_type_id=self._user_type_id,
         )
 
         # Resolve the reported content's playable media so the MRT can show the video
