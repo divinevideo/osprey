@@ -7,6 +7,7 @@ from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
 from reported_author import normalize_event_id
+from response_guard import require_json_response
 from udfs.age_restrict_nostr_event import AgeRestrictEffect
 from udfs.ban_nostr_event import BanEventEffect
 
@@ -51,6 +52,11 @@ class RelayManagerSink(BaseOutputSink):
         worker (e.g. ``https://api-relay-prod.divine.video``).
       - ``DIVINE_RELAY_MANAGER_API_KEY``: Required. Value for the ``X-Admin-Key``
         header. Must match the ``ADMIN_API_KEY`` secret on the target worker.
+      - ``CF_ACCESS_CLIENT_ID`` / ``CF_ACCESS_CLIENT_SECRET``: Required wherever
+        relay-manager sits behind an edge authenticator, which is every deployed
+        environment. Set **both or neither**. Without them the request never
+        reaches relay-manager: the edge answers with an auth page carrying a 2xx,
+        which is why ``_request`` checks the body rather than the status alone.
     """
 
     timeout: float = 5.0
@@ -63,12 +69,59 @@ class RelayManagerSink(BaseOutputSink):
             logger.warning('DIVINE_RELAY_MANAGER_URL not set. RelayManagerSink will skip all effects.')
         if not self._api_key:
             logger.warning('DIVINE_RELAY_MANAGER_API_KEY not set. Requests will fail auth.')
+        # A HALF-configured edge token is the dangerous state: neither half set is
+        # correct for local dev, and both set is correct everywhere deployed, but
+        # exactly one -- a typo'd secretKey, a partial ExternalSecret sync -- boots
+        # looking identical to local dev while every enforcement call is refused
+        # by the edge. Say so at startup rather than leaving it to be inferred
+        # from failures later.
+        cf_id = bool(os.environ.get('CF_ACCESS_CLIENT_ID', '').strip())
+        cf_secret = bool(os.environ.get('CF_ACCESS_CLIENT_SECRET', '').strip())
+        if cf_id != cf_secret:
+            present = 'CF_ACCESS_CLIENT_ID' if cf_id else 'CF_ACCESS_CLIENT_SECRET'
+            missing = 'CF_ACCESS_CLIENT_SECRET' if cf_id else 'CF_ACCESS_CLIENT_ID'
+            logger.warning(
+                '%s is set but %s is not. The edge service token is sent only as a pair, so '
+                'no token will be sent and every enforcement call will be refused.',
+                present,
+                missing,
+            )
 
     def _headers(self) -> dict[str, str]:
         h: dict[str, str] = {'Content-Type': 'application/json'}
         if self._api_key:
             h['X-Admin-Key'] = self._api_key
+        # relay-manager sits behind an edge authenticator in the deployed
+        # environments. Both halves or neither: sending one is not a partial
+        # credential, it is an unauthenticated request that the edge answers with
+        # an auth page, and a half-configured deployment must not be mistaken for
+        # an authenticated one.
+        client_id = os.environ.get('CF_ACCESS_CLIENT_ID', '').strip()
+        client_secret = os.environ.get('CF_ACCESS_CLIENT_SECRET', '').strip()
+        if client_id and client_secret:
+            h['CF-Access-Client-Id'] = client_id
+            h['CF-Access-Client-Secret'] = client_secret
         return h
+
+    def _request(self, path: str, payload: dict[str, Any]) -> None:
+        """The ONLY place this module issues an HTTP request.
+
+        Single site on purpose. The response validation below was added after
+        every effect handler silently no-opped for want of it, and patching the
+        handlers that existed at the time would have left the next one exposed to
+        the same failure. Route new calls through here rather than adding a second
+        site; test_sink_request_discipline.py enforces that.
+        """
+        url = f'{self._url}{path}'
+        resp = requests.post(url, json=payload, headers=self._headers(), timeout=self.timeout)
+        resp.raise_for_status()
+        # raise_for_status cannot see a 2xx that is not the API. An unauthenticated
+        # request to an edge-protected endpoint comes back 200 with an auth page,
+        # and treating that as success is what made enforcement silent.
+        # Full body, NOT a prefix: the guard parses it, and a truncated body can
+        # never parse, so slicing here would reject every response as malformed.
+        # The guard bounds the excerpt it puts in the message itself.
+        require_json_response(url, resp.status_code, resp.headers.get('Content-Type', ''), resp.text)
 
     def will_do_work(self, result: ExecutionResult) -> bool:
         if not self._url:
@@ -135,13 +188,7 @@ class RelayManagerSink(BaseOutputSink):
             'params': [effect.event_id, effect.reason],
         }
         try:
-            resp = requests.post(
-                f'{self._url}/api/relay-rpc',
-                json=payload,
-                headers=self._headers(),
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
+            self._request('/api/relay-rpc', payload)
             logger.info('Banned event %s via relay-manager', _loggable_hex64(effect.event_id))
         except Exception:
             logger.exception('Failed to ban event %s via relay-manager', _loggable_hex64(effect.event_id))
@@ -153,13 +200,7 @@ class RelayManagerSink(BaseOutputSink):
             'params': [effect.pubkey, effect.reason],
         }
         try:
-            resp = requests.post(
-                f'{self._url}/api/relay-rpc',
-                json=payload,
-                headers=self._headers(),
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
+            self._request('/api/relay-rpc', payload)
             logger.info('Banned pubkey %s via relay-manager', _loggable_hex64(effect.pubkey))
         except Exception:
             logger.exception('Failed to ban pubkey %s via relay-manager', _loggable_hex64(effect.pubkey))
@@ -185,13 +226,7 @@ class RelayManagerSink(BaseOutputSink):
             'tags': tags,
         }
         try:
-            resp = requests.post(
-                f'{self._url}/api/publish',
-                json=payload,
-                headers=self._headers(),
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
+            self._request('/api/publish', payload)
             logger.info('Published enforcement label for event %s', _loggable_hex64(effect.event_id))
         except Exception:
             logger.exception('Failed to publish enforcement label for event %s', _loggable_hex64(effect.event_id))
@@ -236,13 +271,7 @@ class RelayManagerSink(BaseOutputSink):
             'reason': effect.reason,
         }
         try:
-            resp = requests.post(
-                f'{self._url}/api/moderate-media',
-                json=payload,
-                headers=self._headers(),
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
+            self._request('/api/moderate-media', payload)
             # Log what was SENT, not what arrived: these lines are how an operator
             # reconciles Osprey against moderation-service's records, and the
             # normalised value is the one that exists on the far side.
