@@ -1,9 +1,10 @@
 # First-Report Review (Child Safety, Harassment, CSAM, Illegal, Spam, Impersonation, Other)
 #
 # Flags a report for HUMAN REVIEW on the FIRST report of an event, from ANY reporter
-# (NOT gated to trusted reporters). Every category here emits flag_for_review only --
-# a moderator triages in the matching Coop queue (Child Safety, Harassment, CSAM,
-# General Review); no automatic enforcement. Modeled on FirstSexualReport in
+# (NOT gated to trusted reporters). Every category here emits flag_for_review EXCEPT
+# csam, which additionally hides the event -- see the CSAM block below for why that one
+# acts without a trust gate. A moderator triages in the matching Coop queue (Child
+# Safety, Harassment, CSAM, General Review). Modeled on FirstSexualReport in
 # multi_report_threshold.sml.
 #
 # Together with nudity and violence (multi_report_threshold.sml), this covers all nine
@@ -67,12 +68,9 @@ FirstHarassmentReport = Rule(
 # and the CSAM queue sat empty). The report was reaching Osprey and being parsed
 # correctly; there was simply no rule that matched it.
 #
-# flag_for_review only, deliberately: automatic enforcement stays gated on trust, per
-# this file's rule above. Auto-hiding on any single csam report would let one account
-# mass-report and hide arbitrary content. The immediate auto-hide for real in-app
-# reports continues to come from relay-manager's ReportWatcher, whose gate is a trusted
-# `client` tag rather than reporter reputation -- a signal the bridge does not currently
-# expose to Osprey. Exposing it is what would let Osprey take over that half.
+# illegal stays flag_for_review: it over-matches (auto_hide.sml says so), so acting on
+# one unverified report would hide too much. csam does act -- see the CSAM WhenRules
+# block below for the reasoning and the reversibility that makes it safe.
 FirstCsamReport = Rule(
   when_all=[
     Kind == 1984,
@@ -138,11 +136,31 @@ WhenRules(
   ],
 )
 
+# CSAM is the one category that ACTS on a single report from ANY reporter, because the
+# cost of a missed CSAM report is not comparable to the cost of a wrongly hidden post.
+#
+# Before this, a csam report that did not carry a trusted `client` tag was caught by
+# NOTHING: ReportWatcher's immediate tier is `requireTrustedClient: true` (its default
+# config, trustedClients = diVine,divine-web,divine-mobile), so it skipped the report
+# entirely, and Osprey had no csam rule to fall back on. Verified 2026-08-14.
+#
+# What makes acting on an unverified report acceptable here is that the action is
+# EVENT-LEVEL and reversible: `pubkey=''` means RelayManagerSink issues banevent, never
+# banpubkey, so nothing is purged and no account is touched (see
+# divine/rules/tests/test_enforcement_targets.py, which enforces that boundary). A
+# moderator reverses it from the CSAM queue with Restore-Content. The account decision
+# stays with the human.
+#
+# The abuse ceiling is one hide per event per reporter-independent report, and every
+# hide lands in the CSAM queue where a human sees it. The residual risk is nuisance
+# hiding, and the mitigation is a real trust signal rather than a weaker action:
+# distinct-reporter counting and/or the `client` tag, both roadmapped.
 WhenRules(
   rules_any=[FirstCsamReport],
   then=[
+    BanNostrEvent(event_id=ReportedEventId, pubkey='', reason='CSAM reported; hidden pending human review'),
     LabelAdd(entity=ReportedEventId, label='csam_reported'),
-    DeclareVerdict(verdict='flag_for_review'),
+    DeclareVerdict(verdict='auto_hide'),
   ],
 )
 
