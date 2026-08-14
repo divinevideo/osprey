@@ -119,7 +119,10 @@ def sink_module(monkeypatch):
     monkeypatch.delitem(sys.modules, 'services.coop_sink', raising=False)
     module = importlib.import_module('services.coop_sink')
     importlib.reload(module)
-    return module, captured
+    try:
+        yield module, captured
+    finally:
+        sys.modules.pop('services.coop_sink', None)
 
 
 def _drive(sink_module, features, action_name='nostr_kind_1984', content_id=CONTENT_ID):
