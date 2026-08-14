@@ -124,6 +124,11 @@ labels:
     connotation: negative
     description: At least one uncategorised report received for this event
 
+  ai_generated_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one AI-generated report received for this event from an ordinary reporter
+
   threshold_met:
     valid_for: [EventId, ReportedEventId]
     connotation: negative

@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `FirstSpamReport` UInt8 DEFAULT 0,
     `FirstImpersonationReport` UInt8 DEFAULT 0,
     `FirstOtherReport` UInt8 DEFAULT 0,
+    `FirstAiGeneratedReport` UInt8 DEFAULT 0,
     -- Label routing. Each family has three target shapes (target present, null
     -- target, empty target) and EVERY rule name needs a column here.
     --
@@ -185,6 +186,7 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstIllegalReport` U
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSpamReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstImpersonationReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstOtherReport` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstAiGeneratedReport` UInt8 DEFAULT 0;
 -- Coupled to models/ai_detector_nsfw.sml and its review-only rule. Every
 -- extracted feature needs a column or ClickHouse rejects the whole batch.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReporterPubkeyStr` String DEFAULT '';

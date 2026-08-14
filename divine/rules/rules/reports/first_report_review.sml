@@ -1,4 +1,4 @@
-# First-Report Review (Child Safety, Harassment, CSAM, Illegal, Spam, Impersonation, Other)
+# First-Report Review (Child Safety, Harassment, CSAM, Illegal, Spam, Impersonation, AI-Generated, Other)
 #
 # Flags a report for HUMAN REVIEW on the FIRST report of an event, from ANY reporter
 # (NOT gated to trusted reporters). Every category here emits flag_for_review EXCEPT
@@ -7,10 +7,15 @@
 # Safety, Harassment, CSAM, General Review). Modeled on FirstSexualReport in
 # multi_report_threshold.sml.
 #
-# Together with nudity and violence (multi_report_threshold.sml), this covers all nine
-# canonical report reasons the bridge emits. Before csam, illegal, spam, impersonation
-# and other were added here, an ordinary user reporting any of them reached no moderator
-# through Osprey at all.
+# The bridge emits ELEVEN canonical reasons. With nudity and violence
+# (multi_report_threshold.sml), this file covers every one an ordinary user can report
+# except `underage_user`, which is deliberately relay-manager's: it feeds the age-review
+# case system (15-day clock, age tiers, suspension), not a Coop queue.
+#
+# Before csam, illegal, spam, impersonation, other and ai_generated were added here, an
+# ordinary user reporting any of them reached no moderator through Osprey at all.
+# ai_generated was the subtlest: moderation_service.sml matches it, but only for a
+# service-signed report, so a USER reporting AI slop was silently dropped.
 #
 # WHY NOT trusted-reporter-gated: "trusted reporter" today is a hardcoded list of two
 # system identities (admin + the moderation-service), seeded manually
@@ -124,6 +129,23 @@ FirstImpersonationReport = Rule(
   description='First impersonation report on this event',
 )
 
+# ai_generated was matched ONLY by moderation_service.sml, which requires the signer to
+# carry the `moderation_service` label. divine-web sends 'ai-generated' and divine-mobile
+# sends 'aiGenerated', so ordinary users do report it -- and those reports reached nobody.
+# Guarded against the moderation-service path so a service-signed report does not produce
+# two flag_for_review verdicts for the same event.
+FirstAiGeneratedReport = Rule(
+  when_all=[
+    Kind == 1984,
+    ReportReason == 'ai_generated',
+    ReportedEvent != '',
+    not HasLabel(entity=Pubkey, label='moderation_service'),
+    not HasLabel(entity=ReportedEventId, label='ai_generated_reported'),
+    not HasLabel(entity=ReportedEventId, label='human_reviewed'),
+  ],
+  description='First AI-generated report on this event, from an ordinary reporter',
+)
+
 FirstOtherReport = Rule(
   when_all=[
     Kind == 1984,
@@ -196,6 +218,14 @@ WhenRules(
   rules_any=[FirstImpersonationReport],
   then=[
     LabelAdd(entity=ReportedEventId, label='impersonation_reported'),
+    DeclareVerdict(verdict='flag_for_review'),
+  ],
+)
+
+WhenRules(
+  rules_any=[FirstAiGeneratedReport],
+  then=[
+    LabelAdd(entity=ReportedEventId, label='ai_generated_reported'),
     DeclareVerdict(verdict='flag_for_review'),
   ],
 )
