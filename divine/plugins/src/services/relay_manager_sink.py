@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from typing import Any
 
 import requests
@@ -33,8 +34,8 @@ def _loggable_hex64(value: object) -> str:
     having verified the signature. That is a thin and undocumented coupling to
     lean on for log safety, so the same treatment is applied here.
 
-    This makes the LOG safe. It deliberately does not gate the enforcement call
-    itself; see the note in `_ban_event`.
+    This makes the LOG safe. Enforcement is gated separately, in `push`, which
+    refuses to ban or sign on an id that is not well-formed.
     """
     normalized = normalize_event_id(value)
     return normalized or f'<malformed: {value!r:.64}>'
@@ -134,10 +135,51 @@ class RelayManagerSink(BaseOutputSink):
         ban_effects: list[BanEventEffect] = result.effects.get(BanEventEffect, [])
         for effect in ban_effects:
             assert isinstance(effect, BanEventEffect)
+
+            # Gate the ENFORCEMENT on a well-formed id, not just the log line.
+            #
+            # This was previously left open on purpose and filed for a decision, on the
+            # grounds that "the rules reaching BanNostrEvent gate on a trusted reporter,
+            # a trusted moderation signer, or a distinct-reporter threshold, so this is
+            # not open to any user." That premise stopped being true when csam began
+            # acting on a single report from ANY reporter
+            # (rules/reports/first_report_review.sml). The decision has now been taken:
+            # refuse.
+            #
+            # The id originates in a report's `e` tag and is entirely attacker-chosen.
+            # Unvalidated it reaches the relay RPC and, worse, `_publish_label_event`,
+            # which SIGNS a kind-1985 carrying it with Divine's moderation key and
+            # broadcasts it -- a durable, publicly attributable artifact we did not
+            # author. Skipping is the safe failure: a ban we decline to issue is
+            # recoverable, a signature we publish is not.
+            event_id = normalize_event_id(effect.event_id)
+            if not event_id:
+                logger.error(
+                    'ALERT: refusing to enforce on a malformed event id %s; no ban issued and no label signed',
+                    _loggable_hex64(effect.event_id),
+                )
+                continue
+
+            # Carry the NORMALIZED id forward. _hex64 lowercases, and this sink talks to
+            # /api/relay-rpc, which does not canonicalise -- so an uppercase id would
+            # otherwise ban a different key than the one everything else refers to.
+            effect = replace(effect, event_id=event_id)
+
             self._ban_event(effect)
 
             if effect.pubkey:
-                self._ban_pubkey(effect)
+                # banpubkey PURGES irreversibly. Validate before issuing it, and on a
+                # malformed pubkey skip ONLY the account ban: the event ban above is
+                # legitimate and reversible, so dropping it too would be a worse
+                # outcome than a partial enforcement that says so loudly.
+                if not normalize_event_id(effect.pubkey):
+                    logger.error(
+                        'ALERT: refusing to ban a malformed pubkey %s; the event ban '
+                        'stands, the account ban was NOT issued',
+                        _loggable_hex64(effect.pubkey),
+                    )
+                else:
+                    self._ban_pubkey(effect)
 
             # Only publish the enforcement label after all required bans succeed.
             # Both bans are idempotent so replaying on retry is safe. Label publish
