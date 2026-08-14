@@ -346,15 +346,8 @@ def test_a_fully_populated_report_produces_the_expected_field_set():
 # --- the call site ------------------------------------------------------------
 #
 # Everything above proves the FUNCTION is right. None of it proves the SINK calls
-# it correctly, and that gap cannot be closed the usual way here: coop_sink.py
-# imports gevent, requests, sentry_sdk and the osprey engine, so it cannot be
-# imported in this test environment, and the worker image cannot currently be
-# rebuilt to run it (the base image build fails on dependency rot unrelated to
-# this code -- pinned grpcio-tools needs pkg_resources, which current pip no
-# longer ships).
-#
-# So a wrong keyword name would pass every test above and fail on the first real
-# event. This checks it statically, which is the one technique available.
+# it correctly. The wire test covers runtime values, while these smaller static
+# checks give a direct failure when the builder signature and call site drift.
 
 _SINK = Path(__file__).resolve().parents[1] / 'src' / 'services' / 'coop_sink.py'
 _MODULE = Path(__file__).resolve().parents[1] / 'src' / 'coop_payload.py'

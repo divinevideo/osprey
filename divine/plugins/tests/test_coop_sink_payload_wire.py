@@ -54,11 +54,11 @@ class _VerdictEffect:
         self.verdict = verdict
 
 
-def _stub(name, **attrs):
+def _stub(monkeypatch, name, **attrs):
     module = types.ModuleType(name)
     for key, value in attrs.items():
         setattr(module, key, value)
-    sys.modules[name] = module
+    monkeypatch.setitem(sys.modules, name, module)
     return module
 
 
@@ -84,9 +84,14 @@ def sink_module(monkeypatch):
 
         return _Response()
 
-    _stub('gevent', Timeout=_StubTimeout)
-    _stub('requests', post=_post)
-    _stub('sentry_sdk', capture_exception=lambda *a, **k: None, capture_message=lambda *a, **k: None)
+    _stub(monkeypatch, 'gevent', Timeout=_StubTimeout)
+    _stub(monkeypatch, 'requests', post=_post)
+    _stub(
+        monkeypatch,
+        'sentry_sdk',
+        capture_exception=lambda *a, **k: None,
+        capture_message=lambda *a, **k: None,
+    )
     for pkg in (
         'osprey',
         'osprey.engine',
@@ -98,11 +103,11 @@ def sink_module(monkeypatch):
         'osprey.worker.sinks',
         'osprey.worker.sinks.sink',
     ):
-        _stub(pkg)
-    _stub('osprey.engine.executor.execution_context', ExecutionResult=object)
-    _stub('osprey.engine.language_types.verdicts', VerdictEffect=_VerdictEffect)
-    _stub('osprey.worker.lib.osprey_shared.logging', get_logger=logging.getLogger)
-    _stub('osprey.worker.sinks.sink.output_sink', BaseOutputSink=object)
+        _stub(monkeypatch, pkg)
+    _stub(monkeypatch, 'osprey.engine.executor.execution_context', ExecutionResult=object)
+    _stub(monkeypatch, 'osprey.engine.language_types.verdicts', VerdictEffect=_VerdictEffect)
+    _stub(monkeypatch, 'osprey.worker.lib.osprey_shared.logging', get_logger=logging.getLogger)
+    _stub(monkeypatch, 'osprey.worker.sinks.sink.output_sink', BaseOutputSink=object)
 
     monkeypatch.setenv('DIVINE_COOP_URL', 'https://coop.test.invalid')
     monkeypatch.setenv('DIVINE_COOP_API_KEY', 'test-key')
@@ -111,6 +116,7 @@ def sink_module(monkeypatch):
     # is not what this file is measuring.
     monkeypatch.delenv('DIVINE_RELAY_WS_URL', raising=False)
 
+    monkeypatch.delitem(sys.modules, 'services.coop_sink', raising=False)
     module = importlib.import_module('services.coop_sink')
     importlib.reload(module)
     return module, captured
@@ -147,16 +153,14 @@ def test_the_wire_payload_names_the_AUTHOR_as_creator(sink_module):
             'CreatedAt': 1786637235,
             'Pubkey': AUTHOR,
             'ReportedPubkey': REPORTER,
+            'ReportedAuthorPubkey': AUTHOR,
             'ReportedEventId': CONTENT_ID,
             'EventId': WRAPPER_ID,
         },
     )
     payload = captured['payload']
-    assert payload['userId'] != REPORTER, (
-        'userId carries the REPORTER. Coop would record them as the creator, and a '
-        'reversal would act against the person who filed the report.'
-    )
-    assert payload['content']['pubkey'] != REPORTER, 'pubkey carries the reporter'
+    assert payload['userId'] == AUTHOR, 'userId must carry the resolved author'
+    assert payload['content']['pubkey'] == AUTHOR, 'pubkey must carry the resolved author'
     # And the reporter's own claim is still carried, clearly labelled as a claim.
     assert payload['content']['reported_pubkey'] == REPORTER
 
