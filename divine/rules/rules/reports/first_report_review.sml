@@ -76,6 +76,11 @@ FirstCsamReport = Rule(
     Kind == 1984,
     ReportReason == 'csam',
     ReportedEvent != '',
+    # auto_hide.sml's TrustedReporterCSAM already covers csam from a trusted reporter.
+    # Without this guard BOTH fire on the same report: two bans (idempotent, harmless)
+    # and two kind-1985 publishes, which are explicitly NOT idempotent -- duplicate
+    # entries in the audit trail that is supposed to be authoritative.
+    not HasLabel(entity=Pubkey, label='trusted_reporter'),
     not HasLabel(entity=ReportedEventId, label='csam_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
@@ -87,6 +92,8 @@ FirstIllegalReport = Rule(
     Kind == 1984,
     ReportReason == 'illegal',
     ReportedEvent != '',
+    # Same overlap as csam above: TrustedReporterCSAM matches ['csam', 'illegal'].
+    not HasLabel(entity=Pubkey, label='trusted_reporter'),
     not HasLabel(entity=ReportedEventId, label='illegal_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
@@ -151,10 +158,15 @@ WhenRules(
 # moderator reverses it from the CSAM queue with Restore-Content. The account decision
 # stays with the human.
 #
-# The abuse ceiling is one hide per event per reporter-independent report, and every
-# hide lands in the CSAM queue where a human sees it. The residual risk is nuisance
-# hiding, and the mitigation is a real trust signal rather than a weaker action:
-# distinct-reporter counting and/or the `client` tag, both roadmapped.
+# The bound is one hide PER EVENT, via csam_reported -- it is NOT a bound per actor.
+# One account reporting N different events causes N hides and N items in this queue,
+# and nothing here dedups by reporter (multi_report_threshold.sml carries a
+# `reporter_counted` guard; this path has no equivalent because it has no count).
+# Queue flooding is the sharper risk, not the hides: burying real reports under sybil
+# noise degrades the NCMEC-bound queue this rule exists to feed. The mitigation is a
+# real trust signal rather than a weaker action -- distinct-reporter counting and/or
+# the `client` tag, both roadmapped. Osprey has to own that: Coop cannot count for us
+# (AGGREGATION signals are hardcoded to two test org ids in its image).
 WhenRules(
   rules_any=[FirstCsamReport],
   then=[
