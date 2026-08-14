@@ -132,10 +132,7 @@ def test_there_is_exactly_one_request_site() -> None:
 
 def test_every_handler_goes_through_the_request_helper() -> None:
     """Derived from the AST, so a NEW handler is covered without editing this test."""
-    handlers = [
-        n for n in _class().body
-        if isinstance(n, ast.FunctionDef) and n.name not in _NON_HANDLERS
-    ]
+    handlers = [n for n in _class().body if isinstance(n, ast.FunctionDef) and n.name not in _NON_HANDLERS]
     assert handlers, 'no effect handlers found; the exclusion list has probably gone stale'
     for h in handlers:
         offenders = _http_call_nodes(h)
@@ -173,8 +170,7 @@ def test_the_request_helper_raises_for_status_and_rejects_non_json() -> None:
     # for presence, so wrapping the call in try/except: pass passed.
     for name in ('raise_for_status', 'require_json_response'):
         assert not _is_swallowed(helper, name), (
-            f'{name} is called inside a try whose handler swallows the exception, '
-            f'which defeats it entirely'
+            f'{name} is called inside a try whose handler swallows the exception, which defeats it entirely'
         )
 
 
@@ -200,9 +196,9 @@ def test_headers_use_the_exact_names_the_edge_matches_on() -> None:
         assert header in src, f'_headers must set the {header} header exactly'
     # Assigned into the returned dict, not merely mentioned.
     assigns = [
-        n for n in ast.walk(_fn('_headers'))
-        if isinstance(n, ast.Assign)
-        and any(isinstance(t, ast.Subscript) for t in n.targets)
+        n
+        for n in ast.walk(_fn('_headers'))
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Subscript) for t in n.targets)
     ]
     assigned = {ast.unparse(t.slice) for n in assigns for t in n.targets if isinstance(t, ast.Subscript)}
     for header in ("'CF-Access-Client-Id'", "'CF-Access-Client-Secret'"):
@@ -217,7 +213,8 @@ def test_both_halves_of_the_token_are_required_together() -> None:
     appearing anywhere in the method.
     """
     guards = [
-        n for n in ast.walk(_fn('_headers'))
+        n
+        for n in ast.walk(_fn('_headers'))
         if isinstance(n, ast.BoolOp) and isinstance(n.op, ast.And) and len(n.values) == 2
     ]
     assert guards, '_headers must guard the header pair on BOTH values being present'
@@ -239,10 +236,7 @@ def test_every_handler_re_raises_rather_than_swallowing() -> None:
     Found by mutation: removing the trailing `raise` from `_ban_event` passed all
     286 tests, because `_is_swallowed` was only ever applied to `_request`.
     """
-    handlers = [
-        n for n in _class().body
-        if isinstance(n, ast.FunctionDef) and n.name not in _NON_HANDLERS
-    ]
+    handlers = [n for n in _class().body if isinstance(n, ast.FunctionDef) and n.name not in _NON_HANDLERS]
     assert handlers, 'no effect handlers found; the exclusion list has probably gone stale'
     for h in handlers:
         for node in ast.walk(h):
@@ -259,8 +253,7 @@ def test_every_handler_re_raises_rather_than_swallowing() -> None:
 
 def _guard_call() -> ast.Call:
     for node in ast.walk(_fn('_request')):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
-                and node.func.id == 'require_json_response':
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'require_json_response':
             return node
     raise AssertionError('require_json_response call not found in _request')
 
@@ -299,9 +292,7 @@ def test_the_guard_call_is_not_conditional() -> None:
     call_line = _guard_call().lineno
     for node in ast.walk(_fn('_request')):
         if isinstance(node, ast.If):
-            body_lines = {
-                n.lineno for stmt in node.body for n in ast.walk(stmt) if hasattr(n, 'lineno')
-            }
+            body_lines = {n.lineno for stmt in node.body for n in ast.walk(stmt) if hasattr(n, 'lineno')}
             assert call_line not in body_lines, (
                 f'require_json_response at line {call_line} is inside a conditional at line '
                 f'{node.lineno}; it must run on every request'
@@ -312,15 +303,14 @@ def test_each_access_header_carries_its_matching_value() -> None:
     """Swapped values pass every other check. Copy-paste is the realistic error."""
     pairs = {}
     for node in ast.walk(_fn('_headers')):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
-                and isinstance(node.targets[0], ast.Subscript):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Subscript):
             key = ast.unparse(node.targets[0].slice)
             pairs[key] = ast.unparse(node.value)
     assert pairs.get("'CF-Access-Client-Id'") == 'client_id', (
-        f"CF-Access-Client-Id is assigned {pairs.get(chr(39) + 'CF-Access-Client-Id' + chr(39))!r}, "
+        f'CF-Access-Client-Id is assigned {pairs.get(chr(39) + "CF-Access-Client-Id" + chr(39))!r}, '
         f'expected the client id'
     )
     assert pairs.get("'CF-Access-Client-Secret'") == 'client_secret', (
-        f"CF-Access-Client-Secret is assigned "
-        f"{pairs.get(chr(39) + 'CF-Access-Client-Secret' + chr(39))!r}, expected the client secret"
+        f'CF-Access-Client-Secret is assigned '
+        f'{pairs.get(chr(39) + "CF-Access-Client-Secret" + chr(39))!r}, expected the client secret'
     )
