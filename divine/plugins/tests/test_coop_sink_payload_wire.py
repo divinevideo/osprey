@@ -116,13 +116,23 @@ def sink_module(monkeypatch):
     # is not what this file is measuring.
     monkeypatch.delenv('DIVINE_RELAY_WS_URL', raising=False)
 
-    monkeypatch.delitem(sys.modules, 'services.coop_sink', raising=False)
+    missing = object()
+    services_package = importlib.import_module('services')
+    previous_module = sys.modules.pop('services.coop_sink', missing)
+    previous_attribute = getattr(services_package, 'coop_sink', missing)
+    services_package.__dict__.pop('coop_sink', None)
+
     module = importlib.import_module('services.coop_sink')
     importlib.reload(module)
     try:
         yield module, captured
     finally:
         sys.modules.pop('services.coop_sink', None)
+        services_package.__dict__.pop('coop_sink', None)
+        if previous_module is not missing:
+            sys.modules['services.coop_sink'] = previous_module
+        if previous_attribute is not missing:
+            services_package.coop_sink = previous_attribute
 
 
 def _drive(sink_module, features, action_name='nostr_kind_1984', content_id=CONTENT_ID):
