@@ -56,15 +56,20 @@ def _fn(name: str) -> ast.FunctionDef:
     )
 
 
-def _requests_aliases() -> set[str]:
-    """Names bound to requests functions by `from requests import post` and friends.
+def _http_aliases(tree: ast.AST = _TREE) -> set[str]:
+    """Names bound to HTTP modules or functions by imports.
 
-    A previous version missed this entirely: `from requests import post` followed
-    by a bare `post(...)` call was invisible to it.
+    This includes both `from requests import post` and `import requests as req`.
+    Missing either form lets a direct request bypass the checked helper while the
+    single-site guard stays green.
     """
     aliases = set()
-    for node in ast.walk(_TREE):
-        if isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] in _HTTP_MODULES:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split('.')[0] in _HTTP_MODULES:
+                    aliases.add(alias.asname or alias.name.split('.')[0])
+        elif isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] in _HTTP_MODULES:
             for a in node.names:
                 aliases.add(a.asname or a.name)
     return aliases
@@ -76,14 +81,14 @@ def _requests_aliases() -> set[str]:
 _HTTP_MODULES = {'requests', 'httpx', 'urllib', 'http', 'aiohttp', 'urllib3'}
 
 
-def _http_call_nodes(scope: ast.AST) -> list[ast.Call]:
+def _http_call_nodes(scope: ast.AST, import_tree: ast.AST = _TREE) -> list[ast.Call]:
     """Every call that issues an HTTP request, however it is spelled.
 
     Catches `requests.<anything>(...)`, a bare name imported from an HTTP module,
     and `requests.Session().post(...)` -- where the receiver is itself a Call, so
     resolving only `ast.Name` receivers (as the first version did) missed it.
     """
-    aliases = _requests_aliases()
+    aliases = _http_aliases(import_tree)
     out = []
     for n in ast.walk(scope):
         if not isinstance(n, ast.Call):
@@ -99,6 +104,12 @@ def _http_call_nodes(scope: ast.AST) -> list[ast.Call]:
             if isinstance(root, ast.Name) and (root.id in _HTTP_MODULES or root.id in aliases):
                 out.append(n)
     return out
+
+
+def test_module_aliases_cannot_hide_a_direct_request() -> None:
+    mutant = ast.parse('import requests as req\nreq.post("https://example.invalid")')
+    sites = _http_call_nodes(mutant, mutant)
+    assert len(sites) == 1, '`import requests as req` must not hide req.post from the request-site guard'
 
 
 def _calls(node: ast.AST) -> list[str]:
