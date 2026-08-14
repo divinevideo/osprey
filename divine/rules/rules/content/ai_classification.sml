@@ -12,9 +12,18 @@
 # rather than theoretical. What a hash has no result for returns 'unknown' and
 # matches nothing, which is a per-item condition, not a disabled rule set.
 #
-# The moderation-service currently publishes NIP-32 labels (kind 1985),
-# not kind 1984 reports. The bridge or an adapter needs to normalize
-# these into the event format the models expect.
+# NOTE: the claim that "the bridge or an adapter needs to normalize" the
+# moderation-service's kind 1985 labels was ALSO stale, and is removed. The bridge
+# subscribes to kinds [1984, 1985] and extracts label_namespace / label_value
+# (nostr-kafka-bridge/main.py:249-256), and label_routing.sml consumes them. Verified
+# 2026-08-14. Two stale claims in one header is a pattern: verify this file's notes
+# against the code before relying on them.
+#
+# WHAT IS still true and is a real gap: every Coop routing rule matches on
+# `report_reason`, and a label-driven item carries label_value/label_namespace with no
+# report_reason at all. So a classification falls through every specialist rule into
+# General Review -- a Hive permanent_ban-tier item never reaches the CSAM queue. The
+# fix is Coop-side routing rules keyed on label_value; no change here.
 
 Import(
   rules=[
