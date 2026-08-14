@@ -22,6 +22,8 @@ content. test_coop_payload.py pins the current shape for exactly that reason.
 
 from typing import Any
 
+from reported_author import _hex64
+
 # Detector Actions are keyed on a SHA-256 computed from fetched bytes rather than
 # on a Nostr event id, so they are the one case where this function can build a
 # playable URL itself.
@@ -48,8 +50,10 @@ def build_content_fields(
         wrapper_event_id: Id of the event that carried the moderation signal.
         author: Who signed the moderated content. Becomes Coop's `creator` and
             therefore the subject of Unban-User / Unsuspend-User. **`''` when it
-            could not be resolved**, which is carried through rather than dropped
-            so the adapter refuses loudly instead of acting on a guess.
+            could not be resolved**, which is carried through in `pubkey` rather than
+            dropped so the adapter refuses loudly instead of acting on a guess. The
+            `author` RELATED_ITEM, by contrast, is omitted unless this is 64-char hex,
+            because a junk id there becomes an actionable account rather than an error.
         verdict: The verdict string.
         action_name: Osprey action name; selects the detector branch below.
         media_base_url: Trusted base for detector media URLs.
@@ -92,23 +96,28 @@ def build_content_fields(
     if features.get('NoteText'):
         content['text'] = features['NoteText']
 
+    # Coop's `author` is a RELATED_ITEM and `creatorId` points at it. Without it the
+    # Associated User panel does not render, so Ban/Suspend/Unban/Unsuspend-User cannot be
+    # exercised at all -- half of moderation, silently missing. `pubkey` above cannot carry
+    # the role: it is STRING-typed, and Coop rejects a STRING field in a RELATED_ITEM role.
+    #
+    # EMIT OR OMIT, never a placeholder, and on SHAPE rather than truthiness. Coop 400s the
+    # WHOLE submission when a RELATED_ITEM id is empty, but ACCEPTS any id of length > 0 --
+    # so junk is not an error, it silently creates a related user item a moderator can then
+    # Ban. `author` is hex64-validated on the 1984/1985 paths, but non-wrapper actions pass
+    # `Pubkey` through unvalidated. Losing one item's account panel is recoverable; losing
+    # the item, or actioning a fabricated account, is not.
+    #
+    # Emit the NORMALIZED id: _hex64 strips and lowercases, and an uppercase pubkey left raw
+    # would be a SECOND, distinct related item in Coop for the very same account.
+    author_id = _hex64(author)
+    if author_id and user_type_id:
+        content['author'] = {'id': author_id, 'typeId': user_type_id}
+
     # Build the playable URL from the validated identity and a trusted base;
     # never pass through the caller-controlled URL carried for diagnostics in the
     # Action. Requires BOTH the detector action AND the hash naming this very
     # item, so a detector result about different bytes cannot attach a URL here.
-    # Coop's `author` is a RELATED_ITEM and `creatorId` points at it. Without it the
-    # Associated User panel does not render, so Ban/Suspend/Unban/Unsuspend-User cannot be
-    # exercised at all -- half of moderation, silently missing.
-    #
-    # `pubkey` above cannot carry the role: it is STRING-typed, and Coop rejects a STRING
-    # field in a RELATED_ITEM role.
-    #
-    # EMIT OR OMIT, never a placeholder. Coop 400s the WHOLE submission when a RELATED_ITEM
-    # carries an empty id, so an unresolved author must drop the key. Losing one item's
-    # account panel is recoverable; losing the item is not.
-    if author and user_type_id:
-        content['author'] = {'id': author, 'typeId': user_type_id}
-
     if action_name == DETECTOR_ACTION and features.get('DetectorContentHash') == content_id:
         content['media_url'] = f'{media_base_url}/{content_id}'
         content['label_namespace'] = 'content-warning'

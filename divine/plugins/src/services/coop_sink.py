@@ -68,6 +68,16 @@ class COOPSink(BaseOutputSink):
                 logger.warning('DIVINE_COOP_API_KEY not set. COOPSink will fail auth.')
             if not self._relay_ws_url:
                 logger.info('DIVINE_RELAY_WS_URL not set. COOP items will omit media (no MRT video).')
+            if not self._user_type_id:
+                # Every sibling above announces itself; this one degrades a whole half of
+                # moderation (Ban/Suspend/Unban/Unsuspend-User need the Associated User
+                # panel, which needs `creatorId` -> `author`), so it must not be the one
+                # that stays quiet. Coop still gets the item -- just without the panel.
+                logger.warning(
+                    'DIVINE_COOP_USER_TYPE_ID not set. COOP items will omit the `author` '
+                    'related item, so the Associated User panel will not render and the '
+                    'account-level moderation buttons cannot be used.'
+                )
 
     def _headers(self) -> dict[str, str]:
         return {
