@@ -59,7 +59,9 @@ def fetch_profile(
         # sends no X-Forwarded-For with `500 Unable To Extract Key!` (fixed by
         # divine-funnelcake#926). Surfacing the status makes that diagnosable from
         # the card instead of looking like an account with no profile.
-        detail = getattr(response, 'text', '').strip()
+        detail = ' '.join(getattr(response, 'text', '').split())
+        if detail.startswith('<'):
+            detail = ''
         return None, f'HTTP {status}{f": {detail[:200]}" if detail else ""}'
 
     try:
@@ -76,19 +78,19 @@ def fetch_profile(
         return None, 'malformed response: profile was not an object'
     if profile is not None:
         for field in ('display_name', 'name', 'nip05'):
-            if field in profile and not isinstance(profile[field], str):
+            if profile.get(field) is not None and not isinstance(profile[field], str):
                 return None, f'malformed response: {field} was not a string'
-        if 'nip05_verified' in profile and not isinstance(profile['nip05_verified'], bool):
+        if profile.get('nip05_verified') is not None and not isinstance(profile['nip05_verified'], bool):
             return None, 'malformed response: nip05_verified was not a boolean'
 
     social = body.get('social')
     if social is not None and not isinstance(social, dict):
         return None, 'malformed response: social was not an object'
-    if social is not None and 'follower_count' in social:
+    if social is not None and social.get('follower_count') is not None:
         follower_count = social['follower_count']
         if not isinstance(follower_count, int) or isinstance(follower_count, bool):
             return None, 'malformed response: follower_count was not an integer'
-    if 'has_vanish_request' in body and not isinstance(body['has_vanish_request'], bool):
+    if body.get('has_vanish_request') is not None and not isinstance(body['has_vanish_request'], bool):
         return None, 'malformed response: has_vanish_request was not a boolean'
 
     return body, None

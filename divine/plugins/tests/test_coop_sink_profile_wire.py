@@ -243,6 +243,27 @@ def test_an_http_error_carries_a_bounded_actionable_reason_to_the_card(sink):
     assert len(error) <= len('HTTP 500: ') + 200
 
 
+def test_an_html_error_page_is_not_copied_to_the_card(sink):
+    _, _, profiles = sink
+    profiles[AUTHOR] = (502, None, '<html>\n  <title>Bad Gateway</title>\n</html>')
+    captured = _drive(sink, {'Kind': 1984, 'ReportedAuthorPubkey': AUTHOR, 'EventId': WRAPPER_ID})
+    assert captured['payload']['content']['author_profile_error'] == 'HTTP 502'
+
+
+def test_null_optional_profile_values_do_not_discard_the_valid_profile(sink):
+    _, _, profiles = sink
+    profiles[AUTHOR] = {
+        'pubkey': AUTHOR,
+        'profile': {'display_name': 'Sam', 'name': None, 'nip05': None},
+        'social': {'follower_count': None},
+        'has_vanish_request': None,
+    }
+    captured = _drive(sink, {'Kind': 1984, 'ReportedAuthorPubkey': AUTHOR, 'EventId': WRAPPER_ID})
+    content = captured['payload']['content']
+    assert content['author_profile_state'] == 'resolved'
+    assert content['author_display_name'] == 'Sam'
+
+
 def test_non_report_items_do_not_invent_a_reporter(sink):
     _, _, profiles = sink
     profiles[AUTHOR] = {'pubkey': AUTHOR, 'profile': {'display_name': 'Plain Poster'}}
@@ -250,6 +271,7 @@ def test_non_report_items_do_not_invent_a_reporter(sink):
     content = captured['payload']['content']
     assert content['author_display_name'] == 'Plain Poster'
     assert not any(key.startswith('reporter_') for key in content)
+    assert captured['calls'] == [f'https://funnelcake.test.invalid/api/users/{AUTHOR}']
 
 
 def test_normalized_pubkeys_share_one_lookup_and_one_profile(sink):

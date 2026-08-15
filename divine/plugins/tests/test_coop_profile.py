@@ -41,7 +41,7 @@ def test_no_profile_and_lookup_failed_are_DIFFERENT_states():
     no_profile = profile_fields({'pubkey': PUBKEY, 'profile': None}, prefix='author')
     failed = profile_fields(None, prefix='author', error='timeout')
 
-    assert no_profile['author_profile_state'] == 'no_profile'
+    assert no_profile['author_profile_state'] == 'no_profile_or_upstream_failure'
     assert failed['author_profile_state'] == 'lookup_failed'
     assert no_profile['author_profile_state'] != failed['author_profile_state']
 
@@ -112,3 +112,11 @@ def test_empty_values_are_omitted_rather_than_sent_blank():
     row is noise on the card."""
     got = profile_fields({'pubkey': PUBKEY, 'profile': {'display_name': ''}}, prefix='author')
     assert 'author_display_name' not in got
+
+
+def test_zero_followers_are_omitted_because_funnelcake_also_uses_zero_on_query_failure():
+    got = profile_fields(
+        {'pubkey': PUBKEY, 'profile': {'display_name': 'Sam'}, 'social': {'follower_count': 0}},
+        prefix='author',
+    )
+    assert 'author_follower_count' not in got

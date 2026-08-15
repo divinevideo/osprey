@@ -175,10 +175,17 @@ class COOPSink(BaseOutputSink):
         # three per item.
         #
         # Fail-open like the media lookup -- enrichment must never drop a review item.
-        # But NOT silently: funnelcake answers 200 with a null profile for an unknown
-        # pubkey, so a blank name would read as "this user has no profile" when it may
-        # mean "we could not ask". profile_fields carries that distinction as a field.
+        # But NOT silently: HTTP failures are explicit, while a 200/null profile is
+        # labelled as ambiguous because funnelcake can default an upstream failure to
+        # the same response as a user with no profile.
         if self._relay_api_url:
+            profile_subjects = [
+                ('author', author),
+                ('reported', features.get('ReportedPubkey', '')),
+            ]
+            if _kind(features.get('Kind')) == REPORT_KIND:
+                profile_subjects.append(('reporter', features.get('Pubkey', '')))
+
             seen: dict[str, tuple[Any, Any]] = {}
             # One deadline around the WHOLE set. Per-lookup deadlines would let N
             # distinct pubkeys consume N * profile_timeout and eat the POST's share of
@@ -188,11 +195,7 @@ class COOPSink(BaseOutputSink):
             profile_deadline = gevent.Timeout(self.profile_timeout)
             try:
                 with profile_deadline:
-                    for raw_pubkey in (
-                        author,
-                        features.get('ReportedPubkey', ''),
-                        features.get('Pubkey', ''),
-                    ):
+                    for _, raw_pubkey in profile_subjects:
                         # Validate BEFORE the fetch: `ReportedPubkey` is the first p-tag
                         # of a report, i.e. reporter-controlled, and it is interpolated
                         # into a URL path. requests normalises dot segments, so an
@@ -218,13 +221,6 @@ class COOPSink(BaseOutputSink):
                 logger.warning('COOP profile lookups timed out; submitting with what resolved')
             except Exception:
                 logger.exception('COOP profile lookup failed; submitting without profiles')
-
-            profile_subjects = [
-                ('author', author),
-                ('reported', features.get('ReportedPubkey', '')),
-            ]
-            if _kind(features.get('Kind')) == REPORT_KIND:
-                profile_subjects.append(('reporter', features.get('Pubkey', '')))
 
             for prefix, raw_pubkey in profile_subjects:
                 if not raw_pubkey:

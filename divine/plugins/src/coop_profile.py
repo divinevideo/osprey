@@ -21,7 +21,7 @@ the same reason -- the plugin test step installs pytest and websocket-client onl
 from typing import Any
 
 RESOLVED = 'resolved'
-NO_PROFILE = 'no_profile'
+NO_PROFILE_OR_UPSTREAM_FAILURE = 'no_profile_or_upstream_failure'
 LOOKUP_FAILED = 'lookup_failed'
 
 
@@ -68,7 +68,7 @@ def profile_fields(
 
     profile = response.get('profile')
     if not profile:
-        out[f'{prefix}_profile_state'] = NO_PROFILE
+        out[f'{prefix}_profile_state'] = NO_PROFILE_OR_UPSTREAM_FAILURE
         return out
 
     out[f'{prefix}_profile_state'] = RESOLVED
@@ -94,7 +94,10 @@ def profile_fields(
         out[f'{prefix}_nip05_verified'] = verified
 
     social = response.get('social') or {}
-    if social.get('follower_count') is not None:
-        out[f'{prefix}_follower_count'] = social['follower_count']
+    # Funnelcake defaults a failed social query to zero in an otherwise successful
+    # response. Positive counts are trustworthy; zero is ambiguous and omitted.
+    follower_count = social.get('follower_count')
+    if isinstance(follower_count, int) and not isinstance(follower_count, bool) and follower_count > 0:
+        out[f'{prefix}_follower_count'] = follower_count
 
     return out
