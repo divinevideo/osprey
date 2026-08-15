@@ -87,6 +87,7 @@ FirstCsamReport = Rule(
     # entries in the audit trail that is supposed to be authoritative.
     not HasLabel(entity=Pubkey, label='trusted_reporter'),
     not HasLabel(entity=ReportedEventId, label='csam_reported'),
+    not HasLabel(entity=ReportedEventId, label='auto_hidden'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
   description='First CSAM report on this event, from any reporter',
@@ -100,6 +101,7 @@ FirstIllegalReport = Rule(
     # Same overlap as csam above: TrustedReporterCSAM matches ['csam', 'illegal'].
     not HasLabel(entity=Pubkey, label='trusted_reporter'),
     not HasLabel(entity=ReportedEventId, label='illegal_reported'),
+    not HasLabel(entity=ReportedEventId, label='auto_hidden'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
   description='First report of illegal content on this event, from any reporter',

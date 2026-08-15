@@ -34,6 +34,8 @@ from pathlib import Path
 
 _RULES_ROOT = Path(__file__).resolve().parent.parent
 _LABELS_YAML = _RULES_ROOT / 'config' / 'labels.yaml'
+_AUTO_HIDE_RULES = _RULES_ROOT / 'rules' / 'reports' / 'auto_hide.sml'
+_FIRST_REPORT_RULES = _RULES_ROOT / 'rules' / 'reports' / 'first_report_review.sml'
 
 # Values allowed in `BanNostrEvent(pubkey=...)`.
 #   ''                    -- event-level ban only; the account decision goes to a human.
@@ -161,6 +163,16 @@ def test_report_driven_rules_never_ban_a_claimed_account():
         'rules acting on kind-1984 reports must ban either no account or the resolved '
         f'author, never a pubkey the report claimed; found {offenders}'
     )
+
+
+def test_trusted_auto_hide_dedups_later_first_report_enforcement():
+    """A trusted report and a later ordinary report must not hide one event twice."""
+    trusted = _strip_comments(_AUTO_HIDE_RULES.read_text())
+    first = _strip_comments(_FIRST_REPORT_RULES.read_text())
+    auto_hidden = "HasLabel(entity=ReportedEventId, label='auto_hidden')"
+
+    assert "LabelAdd(entity=ReportedEventId, label='auto_hidden')" in trusted
+    assert first.count(f'not {auto_hidden}') >= 2
 
 
 def test_escalation_labels_are_not_applied_to_reported_entities():
