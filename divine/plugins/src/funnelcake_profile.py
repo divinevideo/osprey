@@ -62,6 +62,17 @@ def fetch_profile(
         return None, f'HTTP {status}'
 
     try:
-        return response.json(), None
+        body = response.json()
     except Exception as exc:  # noqa: BLE001
         return None, f'unparseable response: {type(exc).__name__}'
+
+    if not isinstance(body, dict):
+        return None, 'malformed response: expected an object'
+    if body.get('pubkey') != pubkey:
+        return None, 'malformed response: pubkey did not match request'
+    if body.get('profile') is not None and not isinstance(body['profile'], dict):
+        return None, 'malformed response: profile was not an object'
+    if body.get('social') is not None and not isinstance(body['social'], dict):
+        return None, 'malformed response: social was not an object'
+
+    return body, None

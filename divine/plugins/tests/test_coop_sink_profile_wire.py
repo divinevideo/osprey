@@ -205,6 +205,30 @@ def test_a_TIMEOUT_is_reported_as_a_failed_lookup_not_a_missing_profile(sink):
     assert 'TimeoutError' in content['author_profile_error']
 
 
+@pytest.mark.parametrize(
+    ('body', 'reason'),
+    [
+        ([], 'expected an object'),
+        ({'pubkey': REPORTER, 'profile': {'display_name': 'Wrong Person'}}, 'pubkey did not match request'),
+        ({'pubkey': AUTHOR, 'profile': 'not an object'}, 'profile was not an object'),
+    ],
+)
+def test_a_malformed_profile_response_still_submits_without_misidentifying_the_user(sink, body, reason):
+    """A successful status is not enough to bind identity to the requested pubkey.
+
+    Reject malformed or mismatched bodies before they can either label the card as
+    another person or raise outside the sink's fail-open enrichment boundary.
+    """
+    _, _, profiles = sink
+    profiles[AUTHOR] = body
+    captured = _drive(sink, {'Kind': 1984, 'ReportedAuthorPubkey': AUTHOR, 'EventId': WRAPPER_ID})
+    content = captured['payload']['content']
+    assert captured['payload'] is not None
+    assert content['author_profile_state'] == 'lookup_failed'
+    assert reason in content['author_profile_error']
+    assert 'author_display_name' not in content
+
+
 def test_no_funnelcake_url_means_no_lookup_and_no_profile_fields(sink):
     """Same posture as DIVINE_RELAY_WS_URL: unset disables the enrichment rather
     than failing the submission."""
