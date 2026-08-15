@@ -11,7 +11,7 @@ from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.engine.language_types.verdicts import VerdictEffect
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
-from reported_author import _hex64, author_for_features, content_id_for_features
+from reported_author import REPORT_KIND, _hex64, _kind, author_for_features, content_id_for_features
 
 from .nostr_media import fetch_event_media
 
@@ -39,6 +39,8 @@ class COOPSink(BaseOutputSink):
         submitted without media (fail-open).
       - ``DIVINE_MEDIA_BASE_URL``: trusted base used to construct media URLs
         for content-hash detector Actions (default: ``https://media.divine.video``).
+      - ``DIVINE_RELAY_API_URL``: funnelcake API base used for profile enrichment.
+        Optional; if unset, items are submitted without profile fields (fail-open).
     """
 
     # Budget for the COOP submission itself.
@@ -186,7 +188,7 @@ class COOPSink(BaseOutputSink):
             profile_deadline = gevent.Timeout(self.profile_timeout)
             try:
                 with profile_deadline:
-                    for pubkey in (
+                    for raw_pubkey in (
                         author,
                         features.get('ReportedPubkey', ''),
                         features.get('Pubkey', ''),
@@ -197,7 +199,8 @@ class COOPSink(BaseOutputSink):
                         # unvalidated value steers an in-cluster GET to an arbitrary
                         # funnelcake path and lands the URL in a moderator-visible error
                         # field. reported_author.py:118-120 already settled this.
-                        if pubkey and _hex64(pubkey) and pubkey not in seen:
+                        pubkey = _hex64(raw_pubkey)
+                        if pubkey and pubkey not in seen:
                             # Caught per pubkey, INSIDE the shared deadline. The deadline
                             # bounds total time; this keeps each failure's own reason,
                             # which is the difference between a card saying 'HTTP 500
@@ -216,14 +219,18 @@ class COOPSink(BaseOutputSink):
             except Exception:
                 logger.exception('COOP profile lookup failed; submitting without profiles')
 
-            for prefix, pubkey in (
+            profile_subjects = [
                 ('author', author),
                 ('reported', features.get('ReportedPubkey', '')),
-                ('reporter', features.get('Pubkey', '')),
-            ):
-                if not pubkey:
+            ]
+            if _kind(features.get('Kind')) == REPORT_KIND:
+                profile_subjects.append(('reporter', features.get('Pubkey', '')))
+
+            for prefix, raw_pubkey in profile_subjects:
+                if not raw_pubkey:
                     continue
-                if not _hex64(pubkey):
+                pubkey = _hex64(raw_pubkey)
+                if not pubkey:
                     content.update(profile_fields(None, prefix=prefix, error='not a 64-char hex pubkey'))
                     continue
                 body, error = seen.get(pubkey, (None, 'lookup did not complete'))

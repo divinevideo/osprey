@@ -59,10 +59,10 @@ def sink(monkeypatch):
     profiles: dict = {}
 
     class _Response:
-        status_code = 200
-
-        def __init__(self, body):
+        def __init__(self, body, status_code=200, text=''):
             self._body = body
+            self.status_code = status_code
+            self.text = text
 
         def raise_for_status(self):
             return None
@@ -75,6 +75,9 @@ def sink(monkeypatch):
         pubkey = url.rstrip('/').split('/')[-1]
         if pubkey in profiles and profiles[pubkey] is Exception:
             raise RuntimeError('funnelcake exploded')
+        if pubkey in profiles and isinstance(profiles[pubkey], tuple):
+            status, body, text = profiles[pubkey]
+            return _Response(body, status_code=status, text=text)
         return _Response(profiles.get(pubkey, {'pubkey': pubkey, 'profile': None}))
 
     def _post(url, json=None, headers=None, timeout=None):
@@ -211,6 +214,8 @@ def test_a_TIMEOUT_is_reported_as_a_failed_lookup_not_a_missing_profile(sink):
         ([], 'expected an object'),
         ({'pubkey': REPORTER, 'profile': {'display_name': 'Wrong Person'}}, 'pubkey did not match request'),
         ({'pubkey': AUTHOR, 'profile': 'not an object'}, 'profile was not an object'),
+        ({'pubkey': AUTHOR, 'profile': {'display_name': {'nested': 'value'}}}, 'display_name was not a string'),
+        ({'pubkey': AUTHOR, 'profile': {}, 'social': {'follower_count': {}}}, 'follower_count was not an integer'),
     ],
 )
 def test_a_malformed_profile_response_still_submits_without_misidentifying_the_user(sink, body, reason):
@@ -227,6 +232,40 @@ def test_a_malformed_profile_response_still_submits_without_misidentifying_the_u
     assert content['author_profile_state'] == 'lookup_failed'
     assert reason in content['author_profile_error']
     assert 'author_display_name' not in content
+
+
+def test_an_http_error_carries_a_bounded_actionable_reason_to_the_card(sink):
+    _, _, profiles = sink
+    profiles[AUTHOR] = (500, {'error': 'rate limited'}, 'Unable To Extract Key!' + 'x' * 500)
+    captured = _drive(sink, {'Kind': 1984, 'ReportedAuthorPubkey': AUTHOR, 'EventId': WRAPPER_ID})
+    error = captured['payload']['content']['author_profile_error']
+    assert error.startswith('HTTP 500: Unable To Extract Key!')
+    assert len(error) <= len('HTTP 500: ') + 200
+
+
+def test_non_report_items_do_not_invent_a_reporter(sink):
+    _, _, profiles = sink
+    profiles[AUTHOR] = {'pubkey': AUTHOR, 'profile': {'display_name': 'Plain Poster'}}
+    captured = _drive(sink, {'Kind': 1, 'Pubkey': AUTHOR, 'EventId': WRAPPER_ID}, action_name='new_account_spam')
+    content = captured['payload']['content']
+    assert content['author_display_name'] == 'Plain Poster'
+    assert not any(key.startswith('reporter_') for key in content)
+
+
+def test_normalized_pubkeys_share_one_lookup_and_one_profile(sink):
+    _, captured, profiles = sink
+    profiles[AUTHOR] = {'pubkey': AUTHOR, 'profile': {'display_name': 'Same Person'}}
+    _drive(
+        sink,
+        {
+            'Kind': 1984,
+            'ReportedAuthorPubkey': AUTHOR,
+            'ReportedPubkey': AUTHOR.upper(),
+            'EventId': WRAPPER_ID,
+        },
+    )
+    assert captured['calls'] == [f'https://funnelcake.test.invalid/api/users/{AUTHOR}']
+    assert captured['payload']['content']['reported_display_name'] == 'Same Person'
 
 
 def test_no_funnelcake_url_means_no_lookup_and_no_profile_fields(sink):

@@ -1,19 +1,17 @@
 """A moderator must see a person, not 64 hex characters -- and must be able to tell
-'this account published no profile' apart from 'we could not look it up'.
+'the API returned no profile' apart from 'we could not complete the HTTP lookup'.
 
-Those two are the same blank space on a review card, and they mean opposite things.
-The first is a fact about the user and is safe to act on. The second is a fact about
-our infrastructure and means the card is missing evidence the moderator was entitled
-to. funnelcake makes this trap easy: `GET /api/users/{pubkey}` answers **HTTP 200
-with a null profile** for a pubkey it has never seen, so status code alone cannot
-separate them. Measured 2026-08-14 against a local funnelcake:
+Those two are the same blank space on a review card but describe different outcomes
+at the HTTP hop. funnelcake makes this trap easy: `GET /api/users/{pubkey}` answers
+**HTTP 200 with a null profile** for a pubkey it has never seen. Measured 2026-08-14
+against a local funnelcake:
 
     unknown pubkey -> HTTP 200  {"profile": null, "social": {...}, ...}
 
-That is the same silent-success shape as the Cloudflare Access auth page (a 200
-that is not an answer) and funnelcake's own rate limiter (a 500 nothing surfaced).
-So the resolution STATE is carried explicitly as a field, and these tests exist to
-keep it that way.
+Funnelcake can also default its own failed profile query to null, so this state does
+not claim more than the HTTP response proves. The resolution state still separates
+HTTP failures such as an auth page or rate limiter response from a successful JSON
+response, and these tests keep that distinction explicit.
 """
 
 import pytest
@@ -38,8 +36,8 @@ def test_a_resolved_profile_gives_the_moderator_a_name():
 
 
 def test_no_profile_and_lookup_failed_are_DIFFERENT_states():
-    """The assertion this module exists for. Both leave the name blank; only one
-    means the card is untrustworthy."""
+    """The assertion this module exists for. Both leave the name blank, but only
+    one records that this HTTP lookup itself failed."""
     no_profile = profile_fields({'pubkey': PUBKEY, 'profile': None}, prefix='author')
     failed = profile_fields(None, prefix='author', error='timeout')
 

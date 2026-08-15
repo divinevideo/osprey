@@ -207,8 +207,8 @@ services:
       - DIVINE_COOP_API_KEY=
       - DIVINE_MODERATION_API_URL=https://moderation-api.divine.video
 
-      # Relay HTTP API used to resolve a reported event's true author
-      # (ResolveEventAuthor). Deliberately blank: pointing local dev at
+      # Relay HTTP API used to resolve a reported event's true author and enrich
+      # COOP cards with profiles. Deliberately blank: pointing local dev at
       # production would send real queries there, and the events a local test
       # references do not exist there anyway. Set it to exercise resolution:
       # - DIVINE_RELAY_API_URL=https://relay.divine.video

@@ -7,11 +7,11 @@ counts, and whether the account has asked to vanish.
 
 **The resolution STATE is a field, not an inference from blankness.** funnelcake
 answers `GET /api/users/{pubkey}` with HTTP 200 and a null profile for a pubkey it
-has never seen, so a blank name means either "this account published no profile"
-(a fact about the user, safe to act on) or "we could not look it up" (a fact about
-our infrastructure, meaning the card is missing evidence). Status code cannot tell
-them apart. Carrying the state explicitly is the whole point of this module; see
-test_coop_profile.py.
+has never seen, so a blank name cannot distinguish that response from a failed HTTP
+lookup. Status code distinguishes those cases at this hop. Funnelcake can itself
+default a failed profile query to null, which remains indistinguishable upstream;
+the PR documents that API limit. Carrying the HTTP-hop state explicitly is the
+point of this module; see test_coop_profile.py.
 
 Deliberately pure: the HTTP call, its timeout and its failure handling live in the
 sink, and the error string is passed in. Same split as `coop_payload.py`, and for
@@ -35,8 +35,9 @@ def profile_fields(
 
     Args:
         response: funnelcake's `GET /api/users/{pubkey}` body, or None if the call
-            did not produce one. A body with `profile: null` is a successful lookup
-            of a user who has published no profile -- NOT a failure.
+            did not produce one. A body with `profile: null` is a successful HTTP
+            lookup with no returned profile. Funnelcake can also default a failed
+            upstream profile query to null, which this response cannot distinguish.
         prefix: `author`, `reported` or `reporter`. These are three different people
             answering three different questions, so each gets its own namespace; one
             shared set of fields would show one person's identity against another's
@@ -95,10 +96,5 @@ def profile_fields(
     social = response.get('social') or {}
     if social.get('follower_count') is not None:
         out[f'{prefix}_follower_count'] = social['follower_count']
-
-    # Only when true. A vanish request changes what a moderator should do, so it is
-    # worth a row; its absence is the normal case and does not need one.
-    if response.get('has_vanish_request'):
-        out[f'{prefix}_has_vanish_request'] = True
 
     return out
