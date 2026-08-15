@@ -64,11 +64,11 @@ class _Subscriptable(metaclass=_AnyMeta):
     pass
 
 
-def _stub(name, **attrs):
+def _stub(monkeypatch, name, **attrs):
     module = types.ModuleType(name)
     for key, value in attrs.items():
         setattr(module, key, value)
-    sys.modules[name] = module
+    monkeypatch.setitem(sys.modules, name, module)
     return module
 
 
@@ -90,8 +90,8 @@ def sink_module(monkeypatch):
 
         return _Response()
 
-    _stub('requests', post=_post)
-    _stub('sentry_sdk', capture_exception=lambda *a, **k: None, capture_message=lambda *a, **k: None)
+    _stub(monkeypatch, 'requests', post=_post)
+    _stub(monkeypatch, 'sentry_sdk', capture_exception=lambda *a, **k: None, capture_message=lambda *a, **k: None)
     for pkg in (
         'osprey',
         'osprey.engine',
@@ -107,30 +107,36 @@ def sink_module(monkeypatch):
         'osprey.worker.sinks',
         'osprey.worker.sinks.sink',
     ):
-        _stub(pkg)
-    _stub('osprey.engine.executor.execution_context', ExecutionResult=_Subscriptable, ExecutionContext=_Subscriptable)
-    _stub('osprey.engine.executor.custom_extracted_features', CustomExtractedFeature=_Subscriptable)
+        _stub(monkeypatch, pkg)
+    _stub(
+        monkeypatch,
+        'osprey.engine.executor.execution_context',
+        ExecutionResult=_Subscriptable,
+        ExecutionContext=_Subscriptable,
+    )
+    _stub(monkeypatch, 'osprey.engine.executor.custom_extracted_features', CustomExtractedFeature=_Subscriptable)
     # BanEventEffect is a @dataclass subclassing this; a bare object base is enough for
     # the dataclass machinery, and the sink only reads its fields.
     _stub(
+        monkeypatch,
         'osprey.engine.language_types.effects',
         EffectBase=_Subscriptable,
         EffectToCustomExtractedFeatureBase=_Subscriptable,
     )
-    _stub('osprey.engine.stdlib.udfs.categories', UdfCategories=_Subscriptable)
-    _stub('osprey.engine.udf.arguments', ArgumentsBase=_Subscriptable)
-    _stub('osprey.engine.udf.base', UDFBase=_Subscriptable)
+    _stub(monkeypatch, 'osprey.engine.stdlib.udfs.categories', UdfCategories=_Subscriptable)
+    _stub(monkeypatch, 'osprey.engine.udf.arguments', ArgumentsBase=_Subscriptable)
+    _stub(monkeypatch, 'osprey.engine.udf.base', UDFBase=_Subscriptable)
     # add_slots rewrites a class to use __slots__; identity keeps the dataclass usable.
-    _stub('osprey.engine.utils.types', add_slots=lambda cls: cls)
-    _stub('osprey.worker.lib.osprey_shared.logging', get_logger=logging.getLogger)
-    _stub('osprey.worker.sinks.sink.output_sink', BaseOutputSink=_Subscriptable)
+    _stub(monkeypatch, 'osprey.engine.utils.types', add_slots=lambda cls: cls)
+    _stub(monkeypatch, 'osprey.worker.lib.osprey_shared.logging', get_logger=logging.getLogger)
+    _stub(monkeypatch, 'osprey.worker.sinks.sink.output_sink', BaseOutputSink=_Subscriptable)
     # Stub the EFFECT modules rather than importing the real ones. They drag in the whole
     # UDF-registration machinery, which this file is not testing; the sink only needs the
     # class identity (to key result.effects) and the three fields. Using the same class
     # object here and in _drive is what makes the lookup work.
-    _stub('udfs')
-    _stub('udfs.ban_nostr_event', BanEventEffect=_BanEventEffect)
-    _stub('udfs.age_restrict_nostr_event', AgeRestrictEffect=_AgeRestrictEffect)
+    _stub(monkeypatch, 'udfs')
+    _stub(monkeypatch, 'udfs.ban_nostr_event', BanEventEffect=_BanEventEffect)
+    _stub(monkeypatch, 'udfs.age_restrict_nostr_event', AgeRestrictEffect=_AgeRestrictEffect)
 
     monkeypatch.setenv('DIVINE_RELAY_MANAGER_URL', 'https://relay-manager.test.invalid')
     monkeypatch.setenv('DIVINE_RELAY_MANAGER_API_KEY', 'test-key')
