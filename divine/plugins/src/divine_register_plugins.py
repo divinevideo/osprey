@@ -8,6 +8,7 @@ from osprey.worker.sinks.sink.output_sink import BaseOutputSink, StdoutOutputSin
 from services.coop_sink import COOPSink
 from services.labels_service import PostgresLabelsService
 from services.relay_manager_sink import RelayManagerSink
+from services.udf_error_sink import UdfErrorSink
 from services.zendesk_sink import ZendeskSink
 from udfs.age_restrict_nostr_event import AgeRestrictNostrEvent
 from udfs.ban_nostr_event import BanNostrEvent
@@ -37,6 +38,9 @@ def register_udfs() -> Sequence[Type[UDFBase[Any, Any]]]:
 def register_output_sinks(config: Config) -> Sequence[BaseOutputSink]:
     sinks: List[BaseOutputSink] = [
         StdoutOutputSink(log_sampler=None),
+        # First, so a UDF failure is on the record before any sink that might act on the
+        # incomplete features that failure produced.
+        UdfErrorSink(),
         RelayManagerSink(),
         ZendeskSink(),
         COOPSink(),
