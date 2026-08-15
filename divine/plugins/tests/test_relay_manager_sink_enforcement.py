@@ -177,6 +177,13 @@ class TestIrreversibleBoundary:
         calls = _drive(sink_module, EVENT_ID, AUTHOR)
         assert 'banpubkey' in _methods(calls), 'the account ban path must still work'
 
+    def test_an_uppercase_pubkey_is_sent_and_signed_canonicalised(self, sink_module):
+        calls = _drive(sink_module, EVENT_ID, AUTHOR.upper())
+        banpubkey = [c for c in calls if c['payload'].get('method') == 'banpubkey']
+        labels = [c for c in calls if c['url'].endswith('/api/publish')]
+        assert banpubkey[0]['payload']['params'][0] == AUTHOR
+        assert ['p', AUTHOR] in labels[0]['payload']['tags']
+
 
 class TestMalformedInputIsRefused:
     """A report's `e` tag is attacker-chosen, and CSAM now acts on one report from any
@@ -209,3 +216,5 @@ class TestMalformedInputIsRefused:
         methods = _methods(calls)
         assert 'banevent' in methods
         assert 'banpubkey' not in methods, f'IRREVERSIBLE on malformed input; saw {methods}'
+        labels = [c for c in calls if c['url'].endswith('/api/publish')]
+        assert not any(tag[0] == 'p' for tag in labels[0]['payload']['tags'])

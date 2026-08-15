@@ -172,13 +172,19 @@ class RelayManagerSink(BaseOutputSink):
                 # malformed pubkey skip ONLY the account ban: the event ban above is
                 # legitimate and reversible, so dropping it too would be a worse
                 # outcome than a partial enforcement that says so loudly.
-                if not normalize_event_id(effect.pubkey):
+                pubkey = normalize_event_id(effect.pubkey)
+                if not pubkey:
                     logger.error(
                         'ALERT: refusing to ban a malformed pubkey %s; the event ban '
                         'stands, the account ban was NOT issued',
                         _loggable_hex64(effect.pubkey),
                     )
+                    # Do not sign attacker-shaped data into the audit event either.
+                    effect = replace(effect, pubkey='')
                 else:
+                    # relay-manager accepts lowercase hex only. Carry the same
+                    # canonical value into the RPC and the signed audit event.
+                    effect = replace(effect, pubkey=pubkey)
                     self._ban_pubkey(effect)
 
             # Only publish the enforcement label after all required bans succeed.
@@ -201,30 +207,7 @@ class RelayManagerSink(BaseOutputSink):
             self._age_restrict_media(effect)
 
     def _ban_event(self, effect: BanEventEffect) -> None:
-        # The id is sent AS GIVEN while the log lines around it are sanitised, and
-        # that split is NOT currently justified by anything downstream. Nothing
-        # validates it, verified rather than assumed:
-        #
-        #   - relay-manager's `/^[0-9a-f]{64}$/` check is scoped to `banpubkey` and
-        #     `suspendpubkey` (worker/src/index.ts ~1102). `banevent` falls through.
-        #   - funnelcake's BanEvent takes params[0] and hands it to
-        #     `storage.ban_event` with no hex check, and answers ok.
-        #   - `handlePublish` validates only `kind` and `content` before
-        #     `finalizeEvent(..., secretKey)`, so whatever lands in the `['e', ...]`
-        #     tag below is SIGNED with the moderation key and broadcast.
-        #
-        # So a malformed id is written into funnelcake's banned-events list matching
-        # no event, this sink logs a successful ban, Osprey records the enforcement,
-        # and a kind-1985 carrying the same garbage goes out over Divine's
-        # signature. That is the silent-no-op class this work exists to remove, one
-        # hop further out, and now also durable and attributable.
-        #
-        # It is left unchanged here on purpose. Refusing to call on a malformed id
-        # is a change in enforcement posture, and the last time such a change rode
-        # along inside a hygiene fix it had to be reverted. It is filed for a
-        # decision instead. Reachability is limited: the rules reaching
-        # BanNostrEvent gate on a trusted reporter, a trusted moderation signer, or
-        # a distinct-reporter threshold, so this is not open to any user.
+        # `push` validates and canonicalises this id before enforcement.
         payload: dict[str, Any] = {
             'method': 'banevent',
             'params': [effect.event_id, effect.reason],
