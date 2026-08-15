@@ -72,9 +72,9 @@ def build_content_fields(
         # Describes event_id, not source_event_id. The wrapper's own signer is
         # not carried here; `reported_pubkey` below keeps the reporter's
         # unverified claim, clearly labelled as a claim.
-        # Keep every account identifier on the canonical spelling when the
-        # input is a valid pubkey. Invalid legacy values remain unchanged so
-        # this field preserves its existing fail-loud behaviour.
+        # Keep the payload's pubkey spellings canonical when the input is valid.
+        # Invalid legacy values remain unchanged so this field preserves its
+        # existing fail-loud behaviour.
         'pubkey': author_id or author,
         'kind': features.get('Kind'),
         'created_at': features.get('CreatedAt'),

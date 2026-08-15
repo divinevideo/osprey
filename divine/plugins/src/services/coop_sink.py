@@ -253,7 +253,7 @@ class COOPSink(BaseOutputSink):
             'contentId': content_id,
             'contentType': self._content_type,
             # The builder canonicalizes valid pubkeys for the related item. Reuse
-            # that exact spelling so Coop cannot create two account identities.
+            # that exact spelling so casing cannot split one pubkey into two ids.
             'userId': content['pubkey'],
             'content': content,
             'sync': False,
