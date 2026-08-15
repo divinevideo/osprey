@@ -5,11 +5,13 @@ import gevent
 import requests
 import sentry_sdk
 from coop_payload import build_content_fields
+from coop_profile import profile_fields
+from funnelcake_profile import fetch_profile
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.engine.language_types.verdicts import VerdictEffect
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
-from reported_author import author_for_features, content_id_for_features
+from reported_author import REPORT_KIND, _hex64, _kind, author_for_features, content_id_for_features
 
 from .nostr_media import fetch_event_media
 
@@ -37,6 +39,8 @@ class COOPSink(BaseOutputSink):
         submitted without media (fail-open).
       - ``DIVINE_MEDIA_BASE_URL``: trusted base used to construct media URLs
         for content-hash detector Actions (default: ``https://media.divine.video``).
+      - ``DIVINE_RELAY_API_URL``: funnelcake API base used for profile enrichment.
+        Optional; if unset, items are submitted without profile fields (fail-open).
     """
 
     # Budget for the COOP submission itself.
@@ -48,7 +52,11 @@ class COOPSink(BaseOutputSink):
     # Derived rather than hardcoded because it has to cover both hops: share one budget
     # between them and a slow relay eats the POST's part, gevent kills the greenlet, and
     # the item is dropped (max_retries is 0) instead of merely submitted without media.
-    timeout: float = media_timeout + coop_timeout + 1.0
+    # ONE budget for ALL profile lookups combined, not one each. Per-lookup would make
+    # the worst case scale with the number of distinct pubkeys on an item, which is
+    # exactly what the derived total below cannot absorb.
+    profile_timeout: float = 3.0
+    timeout: float = media_timeout + profile_timeout + coop_timeout + 1.0
 
     def __init__(self) -> None:
         self._url = os.environ.get('DIVINE_COOP_URL', '')
@@ -60,6 +68,10 @@ class COOPSink(BaseOutputSink):
         # omitted rather than guessed. Plumbed by iac; see the account-moderation steps.
         self._user_type_id = os.environ.get('DIVINE_COOP_USER_TYPE_ID', '')
         self._media_base_url = os.environ.get('DIVINE_MEDIA_BASE_URL', 'https://media.divine.video').rstrip('/')
+        # Reuses the variable resolve_event_author already reads, rather than adding a
+        # second name for the same funnelcake API. Unset disables profile enrichment,
+        # exactly as an unset DIVINE_RELAY_WS_URL disables media.
+        self._relay_api_url = os.environ.get('DIVINE_RELAY_API_URL', '').rstrip('/')
 
         if not self._url:
             logger.info('DIVINE_COOP_URL not set. COOPSink disabled.')
@@ -168,6 +180,72 @@ class COOPSink(BaseOutputSink):
             except Exception:
                 # Media is best-effort enrichment; never let it block a review submission.
                 logger.exception('COOP media lookup failed for %s; submitting without media', content_id)
+
+        # Put PEOPLE on the card, not 64 hex characters. Author, reported and reporter
+        # each get their own namespaced fields so one person's identity is never shown
+        # against another's actions.
+        #
+        # Deduplicated by pubkey: on a report the author and the reported user are
+        # usually the same account, so this is one call in the common case rather than
+        # three per item.
+        #
+        # Fail-open like the media lookup -- enrichment must never drop a review item.
+        # But NOT silently: HTTP failures are explicit, while a 200/null profile is
+        # labelled as ambiguous because funnelcake can default an upstream failure to
+        # the same response as a user with no profile.
+        if self._relay_api_url:
+            profile_subjects = [
+                ('author', author),
+                ('reported', features.get('ReportedPubkey', '')),
+            ]
+            if _kind(features.get('Kind')) == REPORT_KIND:
+                profile_subjects.append(('reporter', features.get('Pubkey', '')))
+
+            seen: dict[str, tuple[Any, Any]] = {}
+            # One deadline around the WHOLE set. Per-lookup deadlines would let N
+            # distinct pubkeys consume N * profile_timeout and eat the POST's share of
+            # the push budget, which drops the item outright (max_retries is 0) rather
+            # than submitting it unenriched. That is the failure this whole block is
+            # supposed to be incapable of.
+            profile_deadline = gevent.Timeout(self.profile_timeout)
+            try:
+                with profile_deadline:
+                    for _, raw_pubkey in profile_subjects:
+                        # Validate BEFORE the fetch: `ReportedPubkey` is the first p-tag
+                        # of a report, i.e. reporter-controlled, and it is interpolated
+                        # into a URL path. requests normalises dot segments, so an
+                        # unvalidated value steers an in-cluster GET to an arbitrary
+                        # funnelcake path and lands the URL in a moderator-visible error
+                        # field. reported_author.py:118-120 already settled this.
+                        pubkey = _hex64(raw_pubkey)
+                        if pubkey and pubkey not in seen:
+                            # Caught per pubkey, INSIDE the shared deadline. The deadline
+                            # bounds total time; this keeps each failure's own reason,
+                            # which is the difference between a card saying 'HTTP 500
+                            # Unable To Extract Key!' -- the rate limiter, actionable --
+                            # and a generic 'something went wrong'.
+                            try:
+                                seen[pubkey] = fetch_profile(self._relay_api_url, pubkey, timeout=self.profile_timeout)
+                            except gevent.Timeout:
+                                raise  # the shared deadline; handled below
+                            except Exception as exc:  # noqa: BLE001
+                                seen[pubkey] = (None, f'{type(exc).__name__}: {exc}')
+            except gevent.Timeout as profile_timeout_exc:
+                if profile_timeout_exc is not profile_deadline:
+                    raise  # the sink-level timeout; MultiOutputSink owns it
+                logger.warning('COOP profile lookups timed out; submitting with what resolved')
+            except Exception:
+                logger.exception('COOP profile lookup failed; submitting without profiles')
+
+            for prefix, raw_pubkey in profile_subjects:
+                if not raw_pubkey:
+                    continue
+                pubkey = _hex64(raw_pubkey)
+                if not pubkey:
+                    content.update(profile_fields(None, prefix=prefix, error='not a 64-char hex pubkey'))
+                    continue
+                body, error = seen.get(pubkey, (None, 'lookup did not complete'))
+                content.update(profile_fields(body, prefix=prefix, error=error))
 
         payload: dict[str, Any] = {
             'contentId': content_id,
