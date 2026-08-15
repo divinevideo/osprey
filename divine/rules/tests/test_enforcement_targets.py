@@ -166,13 +166,20 @@ def test_report_driven_rules_never_ban_a_claimed_account():
 
 
 def test_trusted_auto_hide_dedups_later_first_report_enforcement():
-    """A trusted report and a later ordinary report must not hide one event twice."""
+    """Either report order must enforce each category once without swallowing another."""
     trusted = _strip_comments(_AUTO_HIDE_RULES.read_text())
     first = _strip_comments(_FIRST_REPORT_RULES.read_text())
-    auto_hidden = "HasLabel(entity=ReportedEventId, label='auto_hidden')"
 
-    assert "LabelAdd(entity=ReportedEventId, label='auto_hidden')" in trusted
-    assert first.count(f'not {auto_hidden}') >= 2
+    for reason, label in (('csam', 'csam_reported'), ('illegal', 'illegal_reported')):
+        guard = f"not HasLabel(entity=ReportedEventId, label='{label}')"
+        assert f"ReportReason == '{reason}'" in trusted
+        assert guard in trusted
+        assert f"LabelAdd(entity=ReportedEventId, label='{label}')" in trusted
+        assert guard in first
+
+    # Enforcement state is shared across categories, so it must never suppress a
+    # later allegation of a different kind.
+    assert "not HasLabel(entity=ReportedEventId, label='auto_hidden')" not in first
 
 
 def test_escalation_labels_are_not_applied_to_reported_entities():

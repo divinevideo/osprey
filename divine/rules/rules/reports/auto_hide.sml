@@ -21,9 +21,22 @@ TrustedReporterCSAM = Rule(
   when_all=[
     Kind == 1984,
     HasLabel(entity=Pubkey, label='trusted_reporter'),
-    ReportReason in ['csam', 'illegal'],
+    ReportReason == 'csam',
+    not HasLabel(entity=ReportedEventId, label='csam_reported'),
+    not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
-  description='Trusted reporter flagged CSAM or illegal content',
+  description='Trusted reporter flagged CSAM',
+)
+
+TrustedReporterIllegal = Rule(
+  when_all=[
+    Kind == 1984,
+    HasLabel(entity=Pubkey, label='trusted_reporter'),
+    ReportReason == 'illegal',
+    not HasLabel(entity=ReportedEventId, label='illegal_reported'),
+    not HasLabel(entity=ReportedEventId, label='human_reviewed'),
+  ],
+  description='Trusted reporter flagged illegal content',
 )
 
 TrustedReporterNSFW = Rule(
@@ -46,8 +59,17 @@ WhenRules(
   rules_any=[TrustedReporterCSAM],
   then=[
     BanNostrEvent(event_id=ReportedEventId, pubkey='', reason='CSAM reported by trusted reporter'),
-    # Persist the enforcement state so a later ordinary report does not hide the
-    # same event or publish a second audit label.
+    LabelAdd(entity=ReportedEventId, label='csam_reported'),
+    LabelAdd(entity=ReportedEventId, label='auto_hidden'),
+    DeclareVerdict(verdict='auto_hide'),
+  ],
+)
+
+WhenRules(
+  rules_any=[TrustedReporterIllegal],
+  then=[
+    BanNostrEvent(event_id=ReportedEventId, pubkey='', reason='Illegal content reported by trusted reporter'),
+    LabelAdd(entity=ReportedEventId, label='illegal_reported'),
     LabelAdd(entity=ReportedEventId, label='auto_hidden'),
     DeclareVerdict(verdict='auto_hide'),
   ],

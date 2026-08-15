@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `PreviouslySuspended`  UInt8 DEFAULT 0,
     `PermanentBan`         UInt8 DEFAULT 0,
     `TrustedReporterCSAM`  UInt8 DEFAULT 0,
+    `TrustedReporterIllegal` UInt8 DEFAULT 0,
     `TrustedReporterNSFW`  UInt8 DEFAULT 0,
     `FirstChildSafetyReport` UInt8 DEFAULT 0,
     `FirstHarassmentReport`  UInt8 DEFAULT 0,
@@ -251,6 +252,7 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `PreviouslyWarned` UIn
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RapidPosting` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `RejectedLabel` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterCSAM` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterIllegal` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `TrustedReporterNSFW` UInt8 DEFAULT 0;
 
 -- Materialized view for per-rule hit counts (powers the UI dashboard)

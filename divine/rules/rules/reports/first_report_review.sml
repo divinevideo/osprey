@@ -81,13 +81,12 @@ FirstCsamReport = Rule(
     Kind == 1984,
     ReportReason == 'csam',
     ReportedEvent != '',
-    # auto_hide.sml's TrustedReporterCSAM already covers csam from a trusted reporter.
+    # auto_hide.sml's trusted CSAM rule already covers a trusted reporter.
     # Without this guard BOTH fire on the same report: two bans (idempotent, harmless)
     # and two kind-1985 publishes, which are explicitly NOT idempotent -- duplicate
     # entries in the audit trail that is supposed to be authoritative.
     not HasLabel(entity=Pubkey, label='trusted_reporter'),
     not HasLabel(entity=ReportedEventId, label='csam_reported'),
-    not HasLabel(entity=ReportedEventId, label='auto_hidden'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
   description='First CSAM report on this event, from any reporter',
@@ -98,10 +97,9 @@ FirstIllegalReport = Rule(
     Kind == 1984,
     ReportReason == 'illegal',
     ReportedEvent != '',
-    # Same overlap as csam above: TrustedReporterCSAM matches ['csam', 'illegal'].
+    # Same overlap as csam above: auto_hide.sml has a trusted illegal rule.
     not HasLabel(entity=Pubkey, label='trusted_reporter'),
     not HasLabel(entity=ReportedEventId, label='illegal_reported'),
-    not HasLabel(entity=ReportedEventId, label='auto_hidden'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
   description='First report of illegal content on this event, from any reporter',
