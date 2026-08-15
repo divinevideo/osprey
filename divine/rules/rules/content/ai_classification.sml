@@ -12,9 +12,18 @@
 # rather than theoretical. What a hash has no result for returns 'unknown' and
 # matches nothing, which is a per-item condition, not a disabled rule set.
 #
-# The moderation-service currently publishes NIP-32 labels (kind 1985),
-# not kind 1984 reports. The bridge or an adapter needs to normalize
-# these into the event format the models expect.
+# NOTE: the claim that "the bridge or an adapter needs to normalize" the
+# moderation-service's kind 1985 labels was ALSO stale, and is removed. The bridge
+# subscribes to kinds [1984, 1985] and extracts label_namespace / label_value
+# (nostr-kafka-bridge/main.py:249-256), and label_routing.sml consumes them. Verified
+# 2026-08-14. Two stale claims in one header is a pattern: verify this file's notes
+# against the code before relying on them.
+#
+# WHAT IS still true and is a real gap: every Coop routing rule matches on
+# `report_reason`, and a label-driven item carries label_value/label_namespace with no
+# report_reason at all. So a classification falls through every specialist rule into
+# General Review -- a Hive permanent_ban-tier item never reaches the CSAM queue. The
+# fix is Coop-side routing rules keyed on label_value; no change here.
 
 Import(
   rules=[
@@ -88,10 +97,26 @@ PermanentBan = Rule(
   description='AI classified video for permanent ban',
 )
 
+# CONTENT-LEVEL ONLY. `pubkey=''` forces RelayManagerSink to issue `banevent` and never
+# `banpubkey` (relay_manager_sink.py: `if effect.pubkey:`), so this hides the video and
+# leaves the account alone.
+#
+# It previously passed `pubkey=Pubkey`, which purged the author's ENTIRE publishing
+# history irreversibly. That was a category error, and the source it acts on makes it
+# plain: moderation-service's PERMANENT_BAN is keyed on the media SHA256
+# (`permanent-ban:${sha256}`) and enforced by deleting that hash's events
+# (`deleteEventFromRelayBySha256`). It is a decision about a piece of CONTENT. Escalating
+# it to an account purge asserts something the deciding moderator never said.
+#
+# Divine's production model keeps these separate: banning content and banning a user are
+# distinct, deliberate acts. Osprey must not collapse them.
+#
+# Same reasoning, same shape, as the CSAM report rule in reports/first_report_review.sml:
+# hide the content, let a human own the account decision.
 WhenRules(
   rules_any=[PermanentBan],
   then=[
-    BanNostrEvent(event_id=EventId, pubkey=Pubkey, reason='AI classification: permanent ban'),
+    BanNostrEvent(event_id=EventId, pubkey='', reason='AI classification: permanent ban'),
     LabelAdd(entity=EventId, label='ai_classified'),
     LabelAdd(entity=Pubkey, label='warned'),
     DeclareVerdict(verdict='ban'),

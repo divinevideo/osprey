@@ -95,6 +95,45 @@ labels:
     connotation: negative
     description: At least one report of harassment received for this event
 
+  # Dedup labels for the reasons that previously matched no rule at all, so an
+  # ordinary user's report of them never reached a moderator through Osprey.
+  # valid_for stays event-scoped: these mark the reported EVENT, never an account,
+  # so they cannot widen into an account-level enforcement path.
+  csam_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one CSAM report received for this event
+
+  illegal_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one report of illegal content received for this event
+
+  illegal_auto_hidden:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: A trusted illegal-content report auto-hid this event
+
+  spam_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one spam report received for this event
+
+  impersonation_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one impersonation report received for this event
+
+  other_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one uncategorised report received for this event
+
+  ai_generated_reported:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: At least one AI-generated report received for this event from an ordinary reporter
+
   threshold_met:
     valid_for: [EventId, ReportedEventId]
     connotation: negative

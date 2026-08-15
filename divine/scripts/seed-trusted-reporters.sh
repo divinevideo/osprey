@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Seed trusted_reporter labels into Osprey's PostgreSQL labels service.
 #
-# These pubkeys get immediate auto-hide authority for CSAM reports
-# via reports/auto_hide.sml (TrustedReporterCSAM rule).
+# These pubkeys get immediate auto-hide authority for illegal reports
+# via reports/auto_hide.sml (the historical TrustedReporterCSAM rule column,
+# which now represents trusted illegal auto-hides).
 #
 # Usage:
 #   ./seed-trusted-reporters.sh              # local dev (port-forward assumed)

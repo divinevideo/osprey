@@ -34,6 +34,8 @@ from pathlib import Path
 
 _RULES_ROOT = Path(__file__).resolve().parent.parent
 _LABELS_YAML = _RULES_ROOT / 'config' / 'labels.yaml'
+_AUTO_HIDE_RULES = _RULES_ROOT / 'rules' / 'reports' / 'auto_hide.sml'
+_FIRST_REPORT_RULES = _RULES_ROOT / 'rules' / 'reports' / 'first_report_review.sml'
 
 # Values allowed in `BanNostrEvent(pubkey=...)`.
 #   ''                    -- event-level ban only; the account decision goes to a human.
@@ -161,6 +163,29 @@ def test_report_driven_rules_never_ban_a_claimed_account():
         'rules acting on kind-1984 reports must ban either no account or the resolved '
         f'author, never a pubkey the report claimed; found {offenders}'
     )
+
+
+def test_trusted_auto_hide_dedups_later_first_report_enforcement():
+    """Either report order must enforce each category once without swallowing another."""
+    trusted = _strip_comments(_AUTO_HIDE_RULES.read_text())
+    first = _strip_comments(_FIRST_REPORT_RULES.read_text())
+
+    # FirstCsamReport is the only CSAM path, including trusted reporters.
+    first_csam = first.split('FirstCsamReport = Rule(', 1)[1].split('FirstIllegalReport = Rule(', 1)[0]
+    assert "ReportReason == 'csam'" not in trusted
+    assert "not HasLabel(entity=Pubkey, label='trusted_reporter')" not in first_csam
+    assert "not HasLabel(entity=ReportedEventId, label='human_reviewed')" not in first_csam
+
+    # Review-item state must not pre-empt the stronger trusted illegal action.
+    assert "ReportReason == 'illegal'" in trusted
+    assert "not HasLabel(entity=ReportedEventId, label='illegal_auto_hidden')" in trusted
+    assert "LabelAdd(entity=ReportedEventId, label='illegal_auto_hidden')" in trusted
+    assert "LabelAdd(entity=ReportedEventId, label='illegal_reported')" in trusted
+    assert "not HasLabel(entity=ReportedEventId, label='illegal_reported')" in first
+
+    # Enforcement state is shared across categories, so it must never suppress a
+    # later allegation of a different kind.
+    assert "not HasLabel(entity=ReportedEventId, label='auto_hidden')" not in first
 
 
 def test_escalation_labels_are_not_applied_to_reported_entities():

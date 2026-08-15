@@ -114,11 +114,11 @@ CANONICAL_REASONS = {
     'harassment': 'osprey-rule',  # FirstHarassmentReport -> human review queue
     'nudity': 'osprey-rule',  # first/threshold sexual-content rules
     'violence': 'osprey-rule',  # first/threshold violence rules
-    'ai_generated': 'osprey-rule',  # moderation_service rule
+    'ai_generated': 'osprey-rule',  # service and ordinary-reporter rules
     'underage_user': 'relay-manager',  # age review: ReportWatcher 15-day clock + Zendesk, not Osprey
-    'spam': 'default-queue',
-    'impersonation': 'default-queue',
-    'other': 'default-queue',
+    'spam': 'osprey-rule',  # FirstSpamReport -> General Review
+    'impersonation': 'osprey-rule',  # FirstImpersonationReport -> General Review
+    'other': 'osprey-rule',  # FirstOtherReport -> General Review
 }
 
 _REASON_ALIASES = {
@@ -339,7 +339,7 @@ def _wrap_nostr_event(event: dict) -> dict:
         # 6. Keyword scan in content text (last resort).
         # Only match if content is the keyword alone (not a substring of freetext).
         # 'illegal' excluded: ambiguous in freetext and would escalate to auto-hide
-        # for trusted reporters via the CSAM rule.
+        # for trusted reporters via the historical trusted auto-hide rule.
         if not raw_reason:
             content_lower = event.get('content', '').strip().lower()
             for reason in (

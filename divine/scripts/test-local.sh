@@ -115,7 +115,7 @@ echo "Error counts:"
 curl -sf "$CLICKHOUSE_URL" --data "
   SELECT EventId, Kind,
     toUInt32OrZero(toString(JSONExtractRaw(__rule_hits, 'TrustedReporterNSFW'))) AS trusted_nsfw,
-    toUInt32OrZero(toString(JSONExtractRaw(__rule_hits, 'TrustedReporterCSAM'))) AS trusted_csam
+    toUInt32OrZero(toString(JSONExtractRaw(__rule_hits, 'TrustedReporterCSAM'))) AS trusted_illegal
   FROM osprey.osprey_events
   WHERE EventId LIKE 'e2e_test_%'
   FORMAT Pretty

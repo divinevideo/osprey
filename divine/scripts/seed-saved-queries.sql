@@ -1,7 +1,7 @@
 -- Seed default saved queries for Divine Osprey (Nostr moderation)
 -- Run: docker exec -i divine-postgres psql -U osprey -d osprey < divine/scripts/seed-saved-queries.sql
 --
--- Idempotent: uses ON CONFLICT DO NOTHING.
+-- Idempotent: inserts use ON CONFLICT; renamed operator-facing rows update in place.
 -- Re-seed with fresh date ranges: DELETE FROM saved_queries WHERE id BETWEEN 900000000000100001 AND 900000000000100020;
 --                                  DELETE FROM queries WHERE id BETWEEN 900000000000000001 AND 900000000000000020;
 --                                  Then re-run this script.
@@ -156,7 +156,7 @@ INSERT INTO saved_queries (id, query_id, name, saved_by)
 VALUES (900000000000100010, 900000000000000010, 'Suspended Users', 'system@divine.video')
 ON CONFLICT (id) DO NOTHING;
 
--- 11. Trusted Reporter CSAM Flags
+-- 11. Trusted Reporter Illegal Auto-Hides
 INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
 VALUES (
     900000000000000011, NULL, 'system@divine.video', 'TrustedReporterCSAM == 1',
@@ -165,8 +165,8 @@ VALUES (
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO saved_queries (id, query_id, name, saved_by)
-VALUES (900000000000100011, 900000000000000011, 'Trusted Reporter — CSAM', 'system@divine.video')
-ON CONFLICT (id) DO NOTHING;
+VALUES (900000000000100011, 900000000000000011, 'Trusted Reporter — Illegal', 'system@divine.video')
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;
 
 -- 12. Trusted Reporter NSFW Flags
 INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
