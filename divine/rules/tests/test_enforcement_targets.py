@@ -170,12 +170,17 @@ def test_trusted_auto_hide_dedups_later_first_report_enforcement():
     trusted = _strip_comments(_AUTO_HIDE_RULES.read_text())
     first = _strip_comments(_FIRST_REPORT_RULES.read_text())
 
-    for reason, label in (('csam', 'csam_reported'), ('illegal', 'illegal_reported')):
-        guard = f"not HasLabel(entity=ReportedEventId, label='{label}')"
-        assert f"ReportReason == '{reason}'" in trusted
-        assert guard in trusted
-        assert f"LabelAdd(entity=ReportedEventId, label='{label}')" in trusted
-        assert guard in first
+    # FirstCsamReport is the only CSAM path, including trusted reporters.
+    first_csam = first.split('FirstCsamReport = Rule(', 1)[1].split('FirstIllegalReport = Rule(', 1)[0]
+    assert "ReportReason == 'csam'" not in trusted
+    assert "not HasLabel(entity=Pubkey, label='trusted_reporter')" not in first_csam
+
+    # Review-item state must not pre-empt the stronger trusted illegal action.
+    assert "ReportReason == 'illegal'" in trusted
+    assert "not HasLabel(entity=ReportedEventId, label='illegal_auto_hidden')" in trusted
+    assert "LabelAdd(entity=ReportedEventId, label='illegal_auto_hidden')" in trusted
+    assert "LabelAdd(entity=ReportedEventId, label='illegal_reported')" in trusted
+    assert "not HasLabel(entity=ReportedEventId, label='illegal_reported')" in first
 
     # Enforcement state is shared across categories, so it must never suppress a
     # later allegation of a different kind.

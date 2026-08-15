@@ -1,14 +1,14 @@
 # Trusted Reporter Auto-Hide
-# Automatically acts on reports from trusted reporters for CSAM and NSFW content.
+# Automatically acts on trusted illegal and NSFW reports. CSAM from every
+# reporter is handled by FirstCsamReport in first_report_review.sml.
 #
 # Report reasons are normalized by the bridge. Canonical values:
 #   csam, nudity, violence, ai_generated, spam, impersonation, illegal,
 #   harassment, other
 #
-# Mobile sends 'illegal' for CSAM (NIP-56 mapping), which the bridge
-# can't distinguish from violence/copyright 'illegal'. We match both
-# 'csam' (unambiguous) and 'illegal' (may over-match, but for trusted
-# reporters the cost of a false auto-hide on 'illegal' is low).
+# Mobile sends 'illegal' for CSAM (NIP-56 mapping), which the bridge cannot
+# distinguish from violence/copyright 'illegal'. For trusted reporters the cost
+# of a false auto-hide on that overloaded category is low.
 
 Import(
   rules=[
@@ -21,22 +21,11 @@ TrustedReporterCSAM = Rule(
   when_all=[
     Kind == 1984,
     HasLabel(entity=Pubkey, label='trusted_reporter'),
-    ReportReason == 'csam',
-    not HasLabel(entity=ReportedEventId, label='csam_reported'),
-    not HasLabel(entity=ReportedEventId, label='human_reviewed'),
-  ],
-  description='Trusted reporter flagged CSAM',
-)
-
-TrustedReporterIllegal = Rule(
-  when_all=[
-    Kind == 1984,
-    HasLabel(entity=Pubkey, label='trusted_reporter'),
     ReportReason == 'illegal',
-    not HasLabel(entity=ReportedEventId, label='illegal_reported'),
-    not HasLabel(entity=ReportedEventId, label='human_reviewed'),
+    not HasLabel(entity=ReportedEventId, label='illegal_auto_hidden'),
   ],
-  description='Trusted reporter flagged illegal content',
+  # Keep the historical rule name because it is a physical ClickHouse column.
+  description='Trusted reporter flagged illegal content for auto-hide',
 )
 
 TrustedReporterNSFW = Rule(
@@ -54,22 +43,13 @@ TrustedReporterNSFW = Rule(
 # thing relay-manager's ReportWatcher does (it bans the event and never the
 # author). Banning the event is safe because the event id is content-addressed:
 # naming it is proving it. The author decision goes to a human instead, via the
-# auto_hide verdict landing in COOP's CSAM queue.
+# auto_hide verdict landing in COOP's matching queue.
 WhenRules(
   rules_any=[TrustedReporterCSAM],
   then=[
-    BanNostrEvent(event_id=ReportedEventId, pubkey='', reason='CSAM reported by trusted reporter'),
-    LabelAdd(entity=ReportedEventId, label='csam_reported'),
-    LabelAdd(entity=ReportedEventId, label='auto_hidden'),
-    DeclareVerdict(verdict='auto_hide'),
-  ],
-)
-
-WhenRules(
-  rules_any=[TrustedReporterIllegal],
-  then=[
     BanNostrEvent(event_id=ReportedEventId, pubkey='', reason='Illegal content reported by trusted reporter'),
     LabelAdd(entity=ReportedEventId, label='illegal_reported'),
+    LabelAdd(entity=ReportedEventId, label='illegal_auto_hidden'),
     LabelAdd(entity=ReportedEventId, label='auto_hidden'),
     DeclareVerdict(verdict='auto_hide'),
   ],

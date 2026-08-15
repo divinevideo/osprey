@@ -66,12 +66,11 @@ FirstHarassmentReport = Rule(
   description='First report of harassment on this event',
 )
 
-# csam and illegal reach a moderator on ANY user's first report. auto_hide.sml also
-# matches these two, but only from a trusted reporter, and a trusted reporter today is
-# two seeded system identities -- so an ordinary user reporting CSAM produced NOTHING in
-# Coop at all (verified 2026-08-14: a clean single-report probe created no Coop item,
-# and the CSAM queue sat empty). The report was reaching Osprey and being parsed
-# correctly; there was simply no rule that matched it.
+# CSAM and illegal reach a moderator on ANY user's first report. Trusted illegal
+# reports also have an auto-hide path in auto_hide.sml, while FirstCsamReport is
+# the single CSAM path for every reporter. Before this rule, an ordinary user
+# reporting CSAM produced NOTHING in Coop at all (verified 2026-08-14: a clean
+# single-report probe created no Coop item, and the CSAM queue sat empty).
 #
 # illegal stays flag_for_review: it over-matches (auto_hide.sml says so), so acting on
 # one unverified report would hide too much. csam does act -- see the CSAM WhenRules
@@ -81,11 +80,6 @@ FirstCsamReport = Rule(
     Kind == 1984,
     ReportReason == 'csam',
     ReportedEvent != '',
-    # auto_hide.sml's trusted CSAM rule already covers a trusted reporter.
-    # Without this guard BOTH fire on the same report: two bans (idempotent, harmless)
-    # and two kind-1985 publishes, which are explicitly NOT idempotent -- duplicate
-    # entries in the audit trail that is supposed to be authoritative.
-    not HasLabel(entity=Pubkey, label='trusted_reporter'),
     not HasLabel(entity=ReportedEventId, label='csam_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
@@ -97,7 +91,7 @@ FirstIllegalReport = Rule(
     Kind == 1984,
     ReportReason == 'illegal',
     ReportedEvent != '',
-    # Same overlap as csam above: auto_hide.sml has a trusted illegal rule.
+    # auto_hide.sml has a stronger trusted illegal path.
     not HasLabel(entity=Pubkey, label='trusted_reporter'),
     not HasLabel(entity=ReportedEventId, label='illegal_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),

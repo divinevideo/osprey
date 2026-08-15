@@ -109,6 +109,11 @@ labels:
     connotation: negative
     description: At least one report of illegal content received for this event
 
+  illegal_auto_hidden:
+    valid_for: [EventId, ReportedEventId]
+    connotation: negative
+    description: A trusted illegal-content report auto-hid this event
+
   spam_reported:
     valid_for: [EventId, ReportedEventId]
     connotation: negative
