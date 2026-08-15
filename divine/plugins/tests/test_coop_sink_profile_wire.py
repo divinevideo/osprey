@@ -106,6 +106,7 @@ def sink(monkeypatch):
 
     monkeypatch.setenv('DIVINE_COOP_URL', 'https://coop.test.invalid')
     monkeypatch.setenv('DIVINE_COOP_API_KEY', 'test-key')
+    monkeypatch.setenv('DIVINE_COOP_USER_TYPE_ID', 'nostr-user-type')
     monkeypatch.setenv('DIVINE_MEDIA_BASE_URL', 'https://media.test.invalid')
     monkeypatch.setenv('DIVINE_RELAY_API_URL', 'https://funnelcake.test.invalid')
     monkeypatch.delenv('DIVINE_RELAY_WS_URL', raising=False)
@@ -151,6 +152,7 @@ def test_the_moderator_gets_a_name_not_just_hex(sink):
     # verified flag would be invisible there. See coop_profile.profile_fields.
     assert content['author_nip05'] == 'sam@divine.video (verified)'
     assert content['author_profile_state'] == 'resolved'
+    assert content['author'] == {'id': AUTHOR, 'typeId': 'nostr-user-type'}
 
 
 def test_all_three_pubkeys_are_resolved(sink):
