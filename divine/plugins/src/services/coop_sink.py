@@ -33,6 +33,8 @@ class COOPSink(BaseOutputSink):
       - ``DIVINE_COOP_API_KEY``: Organization API key for COOP. Required.
       - ``DIVINE_COOP_CONTENT_TYPE``: Content type name configured in COOP
         (default: ``nostr_event``).
+      - ``DIVINE_COOP_USER_TYPE_ID``: Coop's ``nostr_user`` item type id. Optional;
+        if unset, items omit the related ``author`` field.
       - ``DIVINE_RELAY_WS_URL``: relay websocket URL used to fetch the reported
         event's media so the MRT can show the video under review
         (e.g. ``wss://relay.staging.divine.video``). Optional; if unset, items are
@@ -250,7 +252,9 @@ class COOPSink(BaseOutputSink):
         payload: dict[str, Any] = {
             'contentId': content_id,
             'contentType': self._content_type,
-            'userId': author,
+            # The builder canonicalizes valid pubkeys for the related item. Reuse
+            # that exact spelling so Coop cannot create two account identities.
+            'userId': content['pubkey'],
             'content': content,
             'sync': False,
         }

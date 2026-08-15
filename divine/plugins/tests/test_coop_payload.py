@@ -493,6 +493,7 @@ class TestAuthorRelatedItem:
             user_type_id='9f8b0bb15fd',
         )
         assert content['author']['id'] == 'c' * 64
+        assert content['pubkey'] == content['author']['id']
 
     def test_omits_author_when_the_id_is_not_a_64_char_hex_pubkey(self):
         """Emit-or-omit on SHAPE, not truthiness. Coop accepts any id with length > 0, so a

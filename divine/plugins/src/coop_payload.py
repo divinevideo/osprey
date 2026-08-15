@@ -65,13 +65,17 @@ def build_content_fields(
         The content fields. The caller may add `media_url` / `media_thumbnail`
         afterwards from a relay lookup.
     """
+    author_id = _hex64(author)
     content: dict[str, Any] = {
         'event_id': content_id,
         'source_event_id': wrapper_event_id,
         # Describes event_id, not source_event_id. The wrapper's own signer is
         # not carried here; `reported_pubkey` below keeps the reporter's
         # unverified claim, clearly labelled as a claim.
-        'pubkey': author,
+        # Keep every account identifier on the canonical spelling when the
+        # input is a valid pubkey. Invalid legacy values remain unchanged so
+        # this field preserves its existing fail-loud behaviour.
+        'pubkey': author_id or author,
         'kind': features.get('Kind'),
         'created_at': features.get('CreatedAt'),
         'verdict': verdict,
@@ -110,7 +114,6 @@ def build_content_fields(
     #
     # Emit the NORMALIZED id: _hex64 strips and lowercases, and an uppercase pubkey left raw
     # would be a SECOND, distinct related item in Coop for the very same account.
-    author_id = _hex64(author)
     if author_id and user_type_id:
         content['author'] = {'id': author_id, 'typeId': user_type_id}
 

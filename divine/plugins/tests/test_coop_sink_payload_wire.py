@@ -111,6 +111,7 @@ def sink_module(monkeypatch):
 
     monkeypatch.setenv('DIVINE_COOP_URL', 'https://coop.test.invalid')
     monkeypatch.setenv('DIVINE_COOP_API_KEY', 'test-key')
+    monkeypatch.setenv('DIVINE_COOP_USER_TYPE_ID', 'nostr-user-type')
     monkeypatch.setenv('DIVINE_MEDIA_BASE_URL', 'https://media.test.invalid')
     # Unset so the sink skips the relay media lookup; that path is network I/O and
     # is not what this file is measuring.
@@ -176,6 +177,22 @@ def test_the_wire_payload_names_the_AUTHOR_as_creator(sink_module):
     assert payload['content']['pubkey'] == AUTHOR, 'pubkey must carry the resolved author'
     # And the reporter's own claim is still carried, clearly labelled as a claim.
     assert payload['content']['reported_pubkey'] == REPORTER
+
+
+def test_wire_account_identifiers_use_one_canonical_spelling(sink_module):
+    captured = _drive(
+        sink_module,
+        {
+            'Kind': 1984,
+            'ReportedAuthorPubkey': AUTHOR.upper(),
+            'ReportedEventId': CONTENT_ID,
+            'EventId': WRAPPER_ID,
+        },
+    )
+    payload = captured['payload']
+    assert payload['userId'] == AUTHOR
+    assert payload['content']['pubkey'] == AUTHOR
+    assert payload['content']['author'] == {'id': AUTHOR, 'typeId': 'nostr-user-type'}
 
 
 def test_the_wire_payload_has_the_expected_envelope(sink_module):
