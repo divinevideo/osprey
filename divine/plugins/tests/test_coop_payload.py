@@ -418,6 +418,7 @@ def test_the_sink_passes_the_RIGHT_EXPRESSION_for_every_keyword():
         'verdict': 'verdict.verdict',
         'action_name': 'result.action.action_name',
         'media_base_url': 'self._media_base_url',
+        'user_type_id': 'self._user_type_id',
     }
     actual = {kw.arg: ast.unparse(kw.value) for kw in _call_site().keywords if kw.arg is not None}
     assert actual == expected, (
@@ -431,3 +432,111 @@ def test_the_sink_passes_the_features_dict_positionally():
     call = _call_site()
     assert len(call.args) == 1, f'expected features passed positionally, found {len(call.args)} positional args'
     assert ast.unparse(call.args[0]) == 'features'
+
+
+class TestAuthorRelatedItem:
+    """Coop's `author` field is RELATED_ITEM, and `creatorId` points at it. Without it the
+    Associated User panel does not render and none of Ban/Suspend/Unban/Unsuspend-User can be
+    exercised — half of moderation, silently absent.
+
+    EMIT OR OMIT, never a placeholder: Coop rejects the WHOLE submission with a 400 if a
+    RELATED_ITEM carries an empty id, so a missing author must drop the key rather than send
+    {'id': ''}. Losing one item's account panel is recoverable; losing the item is not.
+    """
+
+    def test_emits_the_author_as_a_related_item(self):
+        # Features carry BOTH a claimed p-tag and the wrapper's own signer, so this
+        # distinguishes "the resolved author" from "a value that happened to be nearby".
+        # Without them, `{'id': features.get('ReportedPubkey') or author}` passes — and that
+        # mutant hands a reporter the power to get someone else's account actioned.
+        content = build_content_fields(
+            {'Kind': 1984, 'Pubkey': 'd' * 64, 'ReportedPubkey': 'e' * 64},
+            content_id='a' * 64,
+            wrapper_event_id='b' * 64,
+            author='c' * 64,
+            verdict='flag_for_review',
+            action_name='nostr_kind_1984',
+            media_base_url='https://media.test',
+            user_type_id='9f8b0bb15fd',
+        )
+        assert content['author'] == {'id': 'c' * 64, 'typeId': '9f8b0bb15fd'}
+        # The RELATED_ITEM id and the pubkey string must describe the SAME account.
+        assert content['author']['id'] == content['pubkey'] == 'c' * 64
+        assert content['author']['id'] != 'e' * 64, "the reporter's claim must never be the subject"
+
+    def test_still_carries_the_pubkey_string_separately(self):
+        """`pubkey` is a STRING field and cannot hold the role; both must be present."""
+        content = build_content_fields(
+            {'Kind': 1984},
+            content_id='a' * 64,
+            wrapper_event_id='b' * 64,
+            author='c' * 64,
+            verdict='flag_for_review',
+            action_name='nostr_kind_1984',
+            media_base_url='https://media.test',
+            user_type_id='9f8b0bb15fd',
+        )
+        assert content['pubkey'] == 'c' * 64
+
+    def test_normalizes_the_author_id_so_casing_cannot_fork_one_account_into_two(self):
+        """Coop keys related items by id string. An uppercase pubkey emitted raw would be a
+        SECOND, distinct user item for the same account -- moderating one would leave the
+        other untouched."""
+        content = build_content_fields(
+            {'Kind': 1984},
+            content_id='a' * 64,
+            wrapper_event_id='b' * 64,
+            author='C' * 64,
+            verdict='flag_for_review',
+            action_name='nostr_kind_1984',
+            media_base_url='https://media.test',
+            user_type_id='9f8b0bb15fd',
+        )
+        assert content['author']['id'] == 'c' * 64
+        assert content['pubkey'] == content['author']['id']
+
+    def test_omits_author_when_the_id_is_not_a_64_char_hex_pubkey(self):
+        """Emit-or-omit on SHAPE, not truthiness. Coop accepts any id with length > 0, so a
+        junk value is not a 400 -- it silently creates a related user item a moderator can
+        then Ban. Non-wrapper actions (detector, repeat_offender) reach here with a pubkey
+        that was never signature-verified."""
+        for junk in ['   ', 'not-hex', 'c' * 63, 'zz' + 'c' * 62]:
+            content = build_content_fields(
+                {'Kind': 1984},
+                content_id='a' * 64,
+                wrapper_event_id='b' * 64,
+                author=junk,
+                verdict='flag_for_review',
+                action_name='nostr_kind_1984',
+                media_base_url='https://media.test',
+                user_type_id='9f8b0bb15fd',
+            )
+            assert 'author' not in content, f'{junk!r} must not become a related user item'
+
+    def test_omits_author_entirely_when_it_could_not_be_resolved(self):
+        content = build_content_fields(
+            {'Kind': 1984},
+            content_id='a' * 64,
+            wrapper_event_id='b' * 64,
+            author='',
+            verdict='flag_for_review',
+            action_name='nostr_kind_1984',
+            media_base_url='https://media.test',
+            user_type_id='9f8b0bb15fd',
+        )
+        assert 'author' not in content, 'an empty RELATED_ITEM id 400s the whole submission'
+
+    def test_omits_author_when_the_user_type_is_not_configured(self):
+        """Until iac plumbs DIVINE_COOP_USER_TYPE_ID the field cannot be built, and a
+        guessed typeId would be rejected for every item."""
+        content = build_content_fields(
+            {'Kind': 1984},
+            content_id='a' * 64,
+            wrapper_event_id='b' * 64,
+            author='c' * 64,
+            verdict='flag_for_review',
+            action_name='nostr_kind_1984',
+            media_base_url='https://media.test',
+            user_type_id='',
+        )
+        assert 'author' not in content

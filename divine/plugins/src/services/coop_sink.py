@@ -33,6 +33,8 @@ class COOPSink(BaseOutputSink):
       - ``DIVINE_COOP_API_KEY``: Organization API key for COOP. Required.
       - ``DIVINE_COOP_CONTENT_TYPE``: Content type name configured in COOP
         (default: ``nostr_event``).
+      - ``DIVINE_COOP_USER_TYPE_ID``: Coop's ``nostr_user`` item type id. Optional;
+        if unset, items omit the related ``author`` field.
       - ``DIVINE_RELAY_WS_URL``: relay websocket URL used to fetch the reported
         event's media so the MRT can show the video under review
         (e.g. ``wss://relay.staging.divine.video``). Optional; if unset, items are
@@ -63,6 +65,10 @@ class COOPSink(BaseOutputSink):
         self._api_key = os.environ.get('DIVINE_COOP_API_KEY', '')
         self._content_type = os.environ.get('DIVINE_COOP_CONTENT_TYPE', 'nostr_event')
         self._relay_ws_url = os.environ.get('DIVINE_RELAY_WS_URL', '')
+        # Coop's nostr_user item type id. Without it the `author` RELATED_ITEM cannot be
+        # built, and a guessed typeId would be rejected for every submission -- so it is
+        # omitted rather than guessed. Plumbed by iac; see the account-moderation steps.
+        self._user_type_id = os.environ.get('DIVINE_COOP_USER_TYPE_ID', '')
         self._media_base_url = os.environ.get('DIVINE_MEDIA_BASE_URL', 'https://media.divine.video').rstrip('/')
         # Reuses the variable resolve_event_author already reads, rather than adding a
         # second name for the same funnelcake API. Unset disables profile enrichment,
@@ -76,6 +82,16 @@ class COOPSink(BaseOutputSink):
                 logger.warning('DIVINE_COOP_API_KEY not set. COOPSink will fail auth.')
             if not self._relay_ws_url:
                 logger.info('DIVINE_RELAY_WS_URL not set. COOP items will omit media (no MRT video).')
+            if not self._user_type_id:
+                # Every sibling above announces itself; this one degrades a whole half of
+                # moderation (Ban/Suspend/Unban/Unsuspend-User need the Associated User
+                # panel, which needs `creatorId` -> `author`), so it must not be the one
+                # that stays quiet. Coop still gets the item -- just without the panel.
+                logger.warning(
+                    'DIVINE_COOP_USER_TYPE_ID not set. COOP items will omit the `author` '
+                    'related item, so the Associated User panel will not render and the '
+                    'account-level moderation buttons cannot be used.'
+                )
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -138,6 +154,7 @@ class COOPSink(BaseOutputSink):
             verdict=verdict.verdict,
             action_name=result.action.action_name,
             media_base_url=self._media_base_url,
+            user_type_id=self._user_type_id,
         )
 
         # Resolve the reported content's playable media so the MRT can show the video
@@ -235,7 +252,9 @@ class COOPSink(BaseOutputSink):
         payload: dict[str, Any] = {
             'contentId': content_id,
             'contentType': self._content_type,
-            'userId': author,
+            # The builder canonicalizes valid pubkeys for the related item. Reuse
+            # that exact spelling so casing cannot split one pubkey into two ids.
+            'userId': content['pubkey'],
             'content': content,
             'sync': False,
         }
