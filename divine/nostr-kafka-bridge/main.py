@@ -114,11 +114,11 @@ CANONICAL_REASONS = {
     'harassment': 'osprey-rule',  # FirstHarassmentReport -> human review queue
     'nudity': 'osprey-rule',  # first/threshold sexual-content rules
     'violence': 'osprey-rule',  # first/threshold violence rules
-    'ai_generated': 'osprey-rule',  # moderation_service rule
+    'ai_generated': 'osprey-rule',  # service and ordinary-reporter rules
     'underage_user': 'relay-manager',  # age review: ReportWatcher 15-day clock + Zendesk, not Osprey
-    'spam': 'default-queue',
-    'impersonation': 'default-queue',
-    'other': 'default-queue',
+    'spam': 'osprey-rule',  # FirstSpamReport -> General Review
+    'impersonation': 'osprey-rule',  # FirstImpersonationReport -> General Review
+    'other': 'osprey-rule',  # FirstOtherReport -> General Review
 }
 
 _REASON_ALIASES = {

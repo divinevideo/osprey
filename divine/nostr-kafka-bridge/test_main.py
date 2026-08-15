@@ -217,6 +217,16 @@ def test_osprey_rule_tokens_actually_have_a_rule():
     assert not missing, f'CANONICAL_REASONS marks these osprey-rule but no rule matches: {missing}'
 
 
+def test_rule_tokens_are_owned_by_osprey():
+    """A new consuming rule must update the canonical ownership registry too."""
+    misowned = {
+        token: bridge.CANONICAL_REASONS.get(token)
+        for token in _rule_reason_tokens()
+        if bridge.CANONICAL_REASONS.get(token) != 'osprey-rule'
+    }
+    assert not misowned, f'SML report rules are not catalogued as osprey-rule: {misowned}'
+
+
 def test_rules_only_reference_canonical_tokens():
     # A rule must not match a token the bridge can never emit / does not catalogue.
     unknown = _rule_reason_tokens() - set(bridge.CANONICAL_REASONS)
