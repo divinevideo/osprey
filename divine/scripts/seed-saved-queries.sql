@@ -156,7 +156,7 @@ INSERT INTO saved_queries (id, query_id, name, saved_by)
 VALUES (900000000000100010, 900000000000000010, 'Suspended Users', 'system@divine.video')
 ON CONFLICT (id) DO NOTHING;
 
--- 11. Trusted Reporter CSAM Flags
+-- 11. Trusted Reporter Illegal Auto-Hides
 INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
 VALUES (
     900000000000000011, NULL, 'system@divine.video', 'TrustedReporterCSAM == 1',
@@ -165,7 +165,7 @@ VALUES (
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO saved_queries (id, query_id, name, saved_by)
-VALUES (900000000000100011, 900000000000000011, 'Trusted Reporter — CSAM', 'system@divine.video')
+VALUES (900000000000100011, 900000000000000011, 'Trusted Reporter — Illegal', 'system@divine.video')
 ON CONFLICT (id) DO NOTHING;
 
 -- 12. Trusted Reporter NSFW Flags

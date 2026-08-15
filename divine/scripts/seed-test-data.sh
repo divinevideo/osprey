@@ -138,13 +138,13 @@ SPAM_VIDEO_ID=$($NAK event --sec "$SPAMMER_NSEC" -k 34235 \
     2>/dev/null | jq -r '.id')
 echo "  Spam video event: ${SPAM_VIDEO_ID:0:16}..."
 
-# --- 3. Trusted reporter files CSAM report (should trigger auto_hide + ban) ---
+# --- 3. Trusted reporter files illegal report (should trigger auto_hide + ban) ---
 # Uses divine-mobile tag format: reason in 3rd element of e/p tags
 echo ""
-echo "--- Test 3: Trusted reporter CSAM report (TrustedReporterCSAM -> auto_hide) ---"
+echo "--- Test 3: Trusted reporter illegal report (TrustedReporterCSAM -> auto_hide) ---"
 $NAK event --sec "$REPORTER_NSEC" -k 1984 \
     -c 'CONTENT REPORT - NIP-56
-Reason: csam
+Reason: illegal
 Reported via Divine for community safety' \
     -t "e=$SPAM_VIDEO_ID;illegal" \
     -t "p=$SPAMMER_PUB;illegal" \
@@ -233,7 +233,7 @@ echo "=== Seed complete ==="
 echo ""
 echo "Published events covering:"
 echo "  - NewAccountSpam (unverified pubkey publishes video)"
-echo "  - TrustedReporterCSAM (trusted reporter files CSAM report)"
+echo "  - TrustedReporterCSAM (historical column; trusted reporter files illegal report)"
 echo "  - TrustedReporterNSFW (trusted reporter files NSFW report)"
 echo "  - ConfirmedNudity (human moderator label, kind 1985)"
 echo "  - ConfirmedCSAM (human moderator label, kind 1985)"

@@ -81,7 +81,6 @@ FirstCsamReport = Rule(
     ReportReason == 'csam',
     ReportedEvent != '',
     not HasLabel(entity=ReportedEventId, label='csam_reported'),
-    not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
   description='First CSAM report on this event, from any reporter',
 )
@@ -167,6 +166,8 @@ WhenRules(
 # config, trustedClients = diVine,divine-web,divine-mobile), so it skipped the report
 # entirely, and Osprey had no csam rule to fall back on. Verified 2026-08-14.
 #
+# `csam_reported` is the category-specific dedup. A broad `human_reviewed` guard
+# would silently discard a new CSAM allegation after an unrelated human decision.
 # What makes acting on an unverified report acceptable here is that the action is
 # EVENT-LEVEL and reversible: `pubkey=''` means RelayManagerSink issues banevent, never
 # banpubkey, so nothing is purged and no account is touched (see

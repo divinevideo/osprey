@@ -174,6 +174,7 @@ def test_trusted_auto_hide_dedups_later_first_report_enforcement():
     first_csam = first.split('FirstCsamReport = Rule(', 1)[1].split('FirstIllegalReport = Rule(', 1)[0]
     assert "ReportReason == 'csam'" not in trusted
     assert "not HasLabel(entity=Pubkey, label='trusted_reporter')" not in first_csam
+    assert "not HasLabel(entity=ReportedEventId, label='human_reviewed')" not in first_csam
 
     # Review-item state must not pre-empt the stronger trusted illegal action.
     assert "ReportReason == 'illegal'" in trusted

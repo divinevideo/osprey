@@ -339,7 +339,7 @@ def _wrap_nostr_event(event: dict) -> dict:
         # 6. Keyword scan in content text (last resort).
         # Only match if content is the keyword alone (not a substring of freetext).
         # 'illegal' excluded: ambiguous in freetext and would escalate to auto-hide
-        # for trusted reporters via the CSAM rule.
+        # for trusted reporters via the historical trusted auto-hide rule.
         if not raw_reason:
             content_lower = event.get('content', '').strip().lower()
             for reason in (
