@@ -17,10 +17,14 @@ the signature either (see divine/plugins/src/reported_author.py). They are
 relay-attested, not proven. The distinction this file enforces is therefore
 event-record-derived versus reporter-asserted, which is the line that actually holds.
 
-The escalation ladder in behavioral/repeat_offender.sml turns account labels into
-that same ban, so the ladder's labels are held to the same standard. `labels.yaml` is
-the enforcing gate (`valid_for`); the call sites are checked here too so a widened
-`valid_for` and a new call site each fail on their own.
+The escalation ladder that turned account labels into that same ban
+(behavioral/repeat_offender.sml) was removed on 2026-08-16, so no rule writes a ladder
+label today and the escalation check below has nothing live to look at. The labels stay
+declared in `labels.yaml` as the vocabulary a real strike system will reuse
+(support-trust-safety #64), and the check stays here for when one lands, guarded by an
+inline positive control so it fails rather than going quiet if the parsing drifts.
+`labels.yaml` is the enforcing gate (`valid_for`); the call sites are checked here too so
+a widened `valid_for` and a new call site each fail on their own.
 
 Parsed from the live .sml files rather than a maintained list, so a new rule that
 enforces against a reporter-asserted value fails here instead of shipping.
@@ -45,7 +49,7 @@ _FIRST_REPORT_RULES = _RULES_ROOT / 'rules' / 'reports' / 'first_report_review.s
 # Anything else is reporter- or label-supplied and must not reach an account ban.
 _ALLOWED_PUBKEY_ARGS = {"''", '""', 'Pubkey', 'ReportedAuthorPubkey'}
 
-# Labels behavioral/repeat_offender.sml escalates on, ending in BanNostrEvent.
+# Labels the removed escalation ladder wrote, retained as vocabulary for s-t-s #64.
 _LADDER_LABELS = {'warned', 'suspended', 'banned'}
 
 _PUBKEY_ARG = re.compile(r'\bpubkey\s*=\s*([^,)]+)')
@@ -215,4 +219,21 @@ def test_escalation_labels_are_not_valid_for_reported_entities():
     ]
     assert not offenders, (
         f'escalation-ladder labels must not be valid for a reporter-supplied entity; found {offenders}'
+    )
+
+
+# The ladder that wrote these labels was deleted on 2026-08-16 (see
+# support-trust-safety s-t-s #64), so the tree has no ladder-label writes and the
+# check below passes trivially. This proves the matcher can still see a violation,
+# so a parser that drifted fails HERE rather than going quiet there. Keep it for
+# when a real strike system lands.
+_LADDER_FIXTURE = "LabelAdd(entity=ReportedPubkey, label='suspended')"
+
+
+def test_escalation_label_matcher_still_detects_a_violation() -> None:
+    entity = _ENTITY_ARG.search(_LADDER_FIXTURE).group(1)
+    label = _LABEL_ARG.search(_LADDER_FIXTURE).group(1)
+    assert label in _LADDER_LABELS and entity.startswith('Reported'), (
+        '_ENTITY_ARG/_LABEL_ARG/_LADDER_LABELS no longer match the shape they guard, '
+        'so test_escalation_labels_are_not_applied_to_reported_entities is vacuous.'
     )
