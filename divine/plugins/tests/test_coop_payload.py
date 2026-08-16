@@ -498,7 +498,7 @@ class TestAuthorRelatedItem:
     def test_omits_author_when_the_id_is_not_a_64_char_hex_pubkey(self):
         """Emit-or-omit on SHAPE, not truthiness. Coop accepts any id with length > 0, so a
         junk value is not a 400 -- it silently creates a related user item a moderator can
-        then Ban. Non-wrapper actions (detector, repeat_offender) reach here with a pubkey
+        then Ban. Non-wrapper actions (e.g. the detector) reach here with a pubkey
         that was never signature-verified."""
         for junk in ['   ', 'not-hex', 'c' * 63, 'zz' + 'c' * 62]:
             content = build_content_fields(

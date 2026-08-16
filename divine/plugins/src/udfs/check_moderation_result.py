@@ -25,9 +25,16 @@ class CheckModerationResultArguments(ArgumentsBase):
 class CheckModerationResult(UDFBase[CheckModerationResultArguments, str]):
     """Queries the Divine moderation API for a video's classification result.
 
-    Returns the action tier as a lowercase string matching the values used
-    in ai_classification.sml rules: 'safe', 'review', 'age_restricted',
-    'permanent_ban', or 'unknown' if the video hasn't been classified.
+    Returns the action tier as a lowercase string: 'safe', 'review',
+    'age_restricted', 'permanent_ban', or 'unknown' if the video hasn't been
+    classified.
+
+    NOTE: this UDF has NO caller as of 2026-08-16. Its only consumer,
+    ai_classification.sml, was removed because it duplicated enforcement
+    moderation-service already performs on its own Hive results, and because
+    DIVINE_MODERATION_API_URL is unset outside production with no staging
+    moderation-api to point at. The UDF is kept as the mechanism a future
+    corrected rule would use; it is registered but unreferenced.
 
     Results are cached in memory for 5 minutes since classification
     results rarely change and video events are the majority of relay
@@ -47,9 +54,9 @@ class CheckModerationResult(UDFBase[CheckModerationResultArguments, str]):
         # case-insensitive, so an uppercase `x` tag validates here and then goes
         # into the URL path and the cache key as written. moderation-service
         # compares case-sensitively, so that spelling misses, this returns
-        # 'unknown', and ai_classification.sml reads content that WAS classified
-        # permanent_ban as unclassified. That is an enforcement miss, not just a
-        # telemetry one, and it would also hold two cache entries per media.
+        # 'unknown', so a caller would read content that WAS classified
+        # permanent_ban as unclassified. That would be an enforcement miss, not just
+        # a telemetry one, and it would also hold two cache entries per media.
         #
         # Same reasoning as the age-restrict sink; see media_hash.py.
         video_hash = normalize_media_hash(arguments.video_hash)

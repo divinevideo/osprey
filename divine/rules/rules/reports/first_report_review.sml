@@ -14,8 +14,9 @@
 #
 # Before csam, illegal, spam, impersonation, other and ai_generated were added here, an
 # ordinary user reporting any of them reached no moderator through Osprey at all.
-# ai_generated was the subtlest: moderation_service.sml matches it, but only for a
-# service-signed report, so a USER reporting AI slop was silently dropped.
+# ai_generated was the subtlest: it was matched only by moderation_service.sml, and
+# only for a service-signed report, so a USER reporting AI slop was silently dropped.
+# That rule was removed on 2026-08-16, so this file is now the only path for it.
 #
 # WHY NOT trusted-reporter-gated: "trusted reporter" today is a hardcoded list of two
 # system identities (admin + the moderation-service), seeded manually
@@ -122,11 +123,13 @@ FirstImpersonationReport = Rule(
   description='First impersonation report on this event',
 )
 
-# ai_generated was matched ONLY by moderation_service.sml, which requires the signer to
+# ai_generated was matched ONLY by moderation_service.sml, which required the signer to
 # carry the `moderation_service` label. divine-web sends 'ai-generated' and divine-mobile
 # sends 'aiGenerated', so ordinary users do report it -- and those reports reached nobody.
-# Guarded against the moderation-service path so a service-signed report does not produce
-# two flag_for_review verdicts for the same event.
+#
+# That rule was removed on 2026-08-16 and nothing writes `moderation_service`, so the
+# signer guard below is inert today. It is retained deliberately: it costs nothing, and
+# it is the correct guard again the moment a service-signed 1984 path exists.
 FirstAiGeneratedReport = Rule(
   when_all=[
     Kind == 1984,
