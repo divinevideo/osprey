@@ -138,17 +138,46 @@ jobs:
           python -m pip install --quiet pytest websocket-client==1.9.0
           PYTHONPATH=divine/plugins/src python -m pytest divine/plugins/tests -q
 
-      - name: Verify SML rules exist
+      - name: Verify every SML Require and Import resolves
         run: |
-          test -f divine/rules/models/base.sml
-          test -f divine/rules/models/nostr/kind1_note.sml
-          test -f divine/rules/models/nostr/kind1984_report.sml
-          test -f divine/rules/models/nostr/video_event.sml
-          test -f divine/rules/rules/behavioral/new_account_spam.sml
-          test -f divine/rules/rules/behavioral/rapid_posting.sml
-          test -f divine/rules/rules/behavioral/repeat_offender.sml
-          test -f divine/rules/rules/reports/auto_hide.sml
-          echo "All SML rules present"
+          # Was a hand-maintained list of `test -f` paths, which asserted only that
+          # some named files existed and went stale the moment a rule was retired.
+          # This resolves the graph instead: every Require/Import target must exist,
+          # and main.sml must still reach rules. A dangling Require fails the bundle
+          # load at runtime, which is the failure actually worth catching here.
+          python3 - <<'PY'
+          import re, sys
+          from pathlib import Path
+
+          root = Path('divine/rules')
+          entry = root / 'main.sml'
+          if not entry.is_file():
+              sys.exit('FAIL: divine/rules/main.sml is missing')
+
+          sml = sorted(root.rglob('*.sml'))
+          if not sml:
+              sys.exit('FAIL: no .sml files found under divine/rules')
+
+          missing = []
+          requires = 0
+          for f in sml:
+              text = f.read_text()
+              for target in re.findall(r"Require\(rule='([^']+)'\)", text):
+                  requires += 1
+                  if not (root / target).is_file():
+                      missing.append(f'{f.relative_to(root)} -> Require {target}')
+              for block in re.findall(r'Import\(\s*rules=\[(.*?)\]', text, re.S):
+                  for target in re.findall(r"'([^']+)'", block):
+                      if not (root / target).is_file():
+                          missing.append(f'{f.relative_to(root)} -> Import {target}')
+
+          if missing:
+              sys.exit('FAIL: unresolved SML references:\n  ' + '\n  '.join(missing))
+          if requires == 0:
+              sys.exit('FAIL: no Require() found, so this check verified nothing')
+
+          print(f'OK: {len(sml)} .sml files, {requires} Require targets, all resolve')
+          PY
 
       - name: Verify Nostr-Kafka bridge
         run: |
