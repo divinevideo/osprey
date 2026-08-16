@@ -108,53 +108,9 @@ ON CONFLICT (id) DO NOTHING;
 -- Rule hit queries (moderation signals)
 -- ═══════════════════════════════════════════════════════════════
 
--- 7. New Account Spam — flagged new accounts
-INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
-VALUES (
-    900000000000000007, NULL, 'system@divine.video', 'NewAccountSpam == 1',
-    tsrange((NOW() - INTERVAL '7 days')::timestamp, NOW()::timestamp),
-    ARRAY['Pubkey'], 'DESCENDING'
-) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO saved_queries (id, query_id, name, saved_by)
-VALUES (900000000000100007, 900000000000000007, 'New Account Spam', 'system@divine.video')
-ON CONFLICT (id) DO NOTHING;
 
--- 8. Rapid Posting — rate-limited accounts
-INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
-VALUES (
-    900000000000000008, NULL, 'system@divine.video', 'RapidPosting == 1',
-    tsrange((NOW() - INTERVAL '7 days')::timestamp, NOW()::timestamp),
-    ARRAY['Pubkey'], 'DESCENDING'
-) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO saved_queries (id, query_id, name, saved_by)
-VALUES (900000000000100008, 900000000000000008, 'Rapid Posting', 'system@divine.video')
-ON CONFLICT (id) DO NOTHING;
-
--- 9. Repeat Offenders — previously warned
-INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
-VALUES (
-    900000000000000009, NULL, 'system@divine.video', 'PreviouslyWarned == 1',
-    tsrange((NOW() - INTERVAL '30 days')::timestamp, NOW()::timestamp),
-    ARRAY['Pubkey'], 'DESCENDING'
-) ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO saved_queries (id, query_id, name, saved_by)
-VALUES (900000000000100009, 900000000000000009, 'Repeat Offenders — Previously Warned', 'system@divine.video')
-ON CONFLICT (id) DO NOTHING;
-
--- 10. Suspended Users — currently suspended
-INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
-VALUES (
-    900000000000000010, NULL, 'system@divine.video', 'PreviouslySuspended == 1',
-    tsrange((NOW() - INTERVAL '30 days')::timestamp, NOW()::timestamp),
-    ARRAY['Pubkey'], 'DESCENDING'
-) ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO saved_queries (id, query_id, name, saved_by)
-VALUES (900000000000100010, 900000000000000010, 'Suspended Users', 'system@divine.video')
-ON CONFLICT (id) DO NOTHING;
 
 -- 11. Trusted Reporter Illegal Auto-Hides
 INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
