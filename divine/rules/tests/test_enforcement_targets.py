@@ -192,12 +192,22 @@ def test_trusted_auto_hide_dedups_later_first_report_enforcement():
     assert "not HasLabel(entity=ReportedEventId, label='auto_hidden')" not in first
 
 
+def _is_ladder_violation(entity, label):
+    """The one predicate both the check below and its positive control apply.
+
+    Extracted so the control exercises the REAL condition rather than a copy of
+    it: inlined in both places, changing one and not the other left the control
+    passing while the check it guards had drifted.
+    """
+    return label in _LADDER_LABELS and entity is not None and entity.startswith('Reported')
+
+
 def test_escalation_labels_are_not_applied_to_reported_entities():
     """The ladder ends in an account ban, so its labels need the same provenance."""
     offenders = [
         f'{_rel(path)}: LabelAdd(entity={entity}, label={label!r})'
         for path, entity, label in _label_adds()
-        if label in _LADDER_LABELS and entity.startswith('Reported')
+        if _is_ladder_violation(entity, label)
     ]
     assert not offenders, f'escalation-ladder labels may only be applied to an event-derived entity; found {offenders}'
 
@@ -231,9 +241,28 @@ _LADDER_FIXTURE = "LabelAdd(entity=ReportedPubkey, label='suspended')"
 
 
 def test_escalation_label_matcher_still_detects_a_violation() -> None:
-    entity = _ENTITY_ARG.search(_LADDER_FIXTURE).group(1)
-    label = _LABEL_ARG.search(_LADDER_FIXTURE).group(1)
-    assert label in _LADDER_LABELS and entity.startswith('Reported'), (
-        '_ENTITY_ARG/_LABEL_ARG/_LADDER_LABELS no longer match the shape they guard, '
-        'so test_escalation_labels_are_not_applied_to_reported_entities is vacuous.'
+    entity_match = _ENTITY_ARG.search(_LADDER_FIXTURE)
+    label_match = _LABEL_ARG.search(_LADDER_FIXTURE)
+    assert entity_match and label_match, (
+        f'_ENTITY_ARG/_LABEL_ARG no longer parse {_LADDER_FIXTURE!r}, so every LabelAdd '
+        f'in the tree now reads as entity=None/label=None and the checks above are vacuous.'
+    )
+    assert _is_ladder_violation(entity_match.group(1), label_match.group(1)), (
+        '_is_ladder_violation no longer flags a ladder label on a reporter-supplied '
+        'entity, so test_escalation_labels_are_not_applied_to_reported_entities is vacuous.'
+    )
+
+
+def test_label_scan_covers_both_models_and_rules():
+    """Guard against a SCOPING drift rather than a predicate one.
+
+    Narrowing _sml_files() or _label_adds() to skip a subtree would leave every
+    check above green while silently not looking there. Assert the scan still
+    reaches both halves of the tree.
+    """
+    scanned = {str(_rel(path)) for path in _sml_files()}
+    assert any(p.startswith('models/') for p in scanned), f'scan no longer reaches models/: {sorted(scanned)}'
+    assert any(p.startswith('rules/') for p in scanned), f'scan no longer reaches rules/: {sorted(scanned)}'
+    assert scanned == {str(p.relative_to(_RULES_ROOT)) for p in _RULES_ROOT.rglob('*.sml')}, (
+        '_sml_files() no longer returns every .sml under the rules root'
     )

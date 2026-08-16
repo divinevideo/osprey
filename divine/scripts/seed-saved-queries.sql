@@ -108,10 +108,6 @@ ON CONFLICT (id) DO NOTHING;
 -- Rule hit queries (moderation signals)
 -- ═══════════════════════════════════════════════════════════════
 
-
-
-
-
 -- 11. Trusted Reporter Illegal Auto-Hides
 INSERT INTO queries (id, parent_id, executed_by, query_filter, date_range, top_n, sort_order)
 VALUES (

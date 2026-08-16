@@ -45,7 +45,7 @@ worth keeping current as config changes. Key couplings:
 
 ## Key conventions
 
-- SML rules live in `divine/rules/rules/` grouped by domain (reports, behavioral, content)
+- SML rules live in `divine/rules/rules/` grouped by domain (reports, content)
 - Labels must be registered in `divine/rules/config/labels.yaml` with correct `valid_for` entity types or the worker crashes on startup
 - `RelayManagerSink` handles enforcement (bans) and Kind 1985 label publishing
 - CI builds images on push to `divine/*` branches

@@ -142,9 +142,16 @@ jobs:
         run: |
           # Was a hand-maintained list of `test -f` paths, which asserted only that
           # some named files existed and went stale the moment a rule was retired.
-          # This resolves the graph instead: every Require/Import target must exist,
-          # and main.sml must still reach rules. A dangling Require fails the bundle
-          # load at runtime, which is the failure actually worth catching here.
+          #
+          # FAILS on an unresolved Require/Import target, which is the condition that
+          # actually breaks the bundle load at runtime.
+          #
+          # REPORTS, without failing, any .sml unreachable from main.sml. Deliberately
+          # not fatal: models/nostr/kind1_note.sml is unreachable AND cannot be deleted
+          # without a paired iac change (the osprey-workers command seds it under
+          # `set -e`), so a hard failure here would be unfixable inside this repo.
+          # Printing it keeps orphans visible instead of silent, which is how two of
+          # them got past the previous check.
           python3 - <<'PY'
           import re, sys
           from pathlib import Path
@@ -176,7 +183,27 @@ jobs:
           if requires == 0:
               sys.exit('FAIL: no Require() found, so this check verified nothing')
 
+          # Reachability, reported not enforced. See the note above.
+          seen, stack = set(), ['main.sml']
+          while stack:
+              cur = stack.pop()
+              if cur in seen:
+                  continue
+              seen.add(cur)
+              f = root / cur
+              if not f.is_file():
+                  continue
+              text = f.read_text()
+              stack += re.findall(r"Require\(rule='([^']+)'\)", text)
+              for block in re.findall(r'Import\(\s*rules=\[(.*?)\]', text, re.S):
+                  stack += re.findall(r"'([^']+)'", block)
+
+          orphans = sorted({str(p.relative_to(root)) for p in sml} - seen)
           print(f'OK: {len(sml)} .sml files, {requires} Require targets, all resolve')
+          if orphans:
+              print('NOTE: unreachable from main.sml (not loaded at runtime):')
+              for o in orphans:
+                  print(f'  {o}')
           PY
 
       - name: Verify Nostr-Kafka bridge

@@ -30,7 +30,6 @@ _MEMBER = re.compile(r"'([^']+)'")
 
 # Verdicts allowed to be unconsumed, each with the reason it is tolerated.
 #
-#
 # Deliberately EMPTY. An earlier revision allowlisted 'suspend' from
 # repeat_offender.sml; that rule is deleted in this same change, so no declared
 # verdict is unconsumed and nothing needs excusing. Keep it empty unless there

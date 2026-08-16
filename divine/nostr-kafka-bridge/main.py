@@ -114,7 +114,7 @@ CANONICAL_REASONS = {
     'harassment': 'osprey-rule',  # FirstHarassmentReport -> human review queue
     'nudity': 'osprey-rule',  # first/threshold sexual-content rules
     'violence': 'osprey-rule',  # first/threshold violence rules
-    'ai_generated': 'osprey-rule',  # service and ordinary-reporter rules
+    'ai_generated': 'osprey-rule',  # ordinary-reporter rule (FirstAiGeneratedReport); the service-signed 1984 path was retired 2026-08-16
     'underage_user': 'relay-manager',  # age review: ReportWatcher 15-day clock + Zendesk, not Osprey
     'spam': 'osprey-rule',  # FirstSpamReport -> General Review
     'impersonation': 'osprey-rule',  # FirstImpersonationReport -> General Review
