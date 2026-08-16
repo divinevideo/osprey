@@ -44,13 +44,29 @@ _RULES_DIR = Path(__file__).resolve().parent.parent / 'rules' / 'rules' / 'repor
 def _rule_reason_tokens():
     """Every report_reason token an SML rule in divine/rules matches on.
 
-    Reads the live .sml files and pulls tokens from both `ReportReason == 'x'` and
+    Reads the live .sml files and pulls tokens from the `ReportReason == 'x'` and
     `ReportReason in ['x', 'y']` forms, so the check reflects the rules as they are
     rather than a second maintained list.
+
+    FirstOtherReport is the catch-all and matches by EXCLUSION
+    (`ReportReason not in [...]`), so naming it in a positive form is impossible:
+    it covers every reason except the ones another owner handles. Any canonical
+    token outside that exclusion list is therefore matched by it, and is added
+    here. Without this, the catch-all reads as matching nothing and the coupling
+    tests below report 'other' as ruleless.
+
+    Both directions fail closed. If the negated form stops parsing, `excluded` is
+    empty, nothing is added, and test_osprey_rule_tokens_actually_have_a_rule goes
+    red on 'other'. If the exclusion list drops a token another system owns,
+    test_rule_tokens_are_owned_by_osprey goes red on it.
     """
     tokens = set()
+    excluded = set()
     eq = re.compile(r"ReportReason\s*==\s*'([^']+)'")
+    # `\s+in` cannot match the `not in` form (the word between is 'not'), so the
+    # positive and negated lists stay disjoint without a lookaround.
     in_list = re.compile(r'ReportReason\s+in\s*\[([^\]]+)\]')
+    not_in_list = re.compile(r'ReportReason\s+not\s+in\s*\[([^\]]+)\]')
     for path in sorted(_RULES_DIR.glob('*.sml')):
         # Strip line comments first so a ReportReason literal inside a '#' comment
         # (e.g. an example in a docstring) cannot inject a phantom token.
@@ -58,6 +74,10 @@ def _rule_reason_tokens():
         tokens.update(eq.findall(text))
         for group in in_list.findall(text):
             tokens.update(re.findall(r"'([^']+)'", group))
+        for group in not_in_list.findall(text):
+            excluded.update(re.findall(r"'([^']+)'", group))
+    if excluded:
+        tokens |= set(bridge.CANONICAL_REASONS) - excluded
     return tokens
 
 
