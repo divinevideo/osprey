@@ -72,6 +72,16 @@ ReportedPubkey: Entity[str] = EntityJson(
   coerce_type=True
 )
 
+# Plain-string form of the reported pubkey, for `!= ''` guards. The Entity form
+# above is for LabelAdd/HasLabel. Mirrors ReportedEvent vs ReportedEventId: a
+# profile-only report (a p-tag with no e-tag) has this set and ReportedEvent
+# empty, which is exactly what user_report_review.sml keys on.
+ReportedPubkeyStr: str = JsonData(
+  path='$.reported_pubkey',
+  coerce_type=True,
+  required=False
+)
+
 # AUTHORITATIVE author, resolved from the reported event itself. An attacker
 # chooses which event to report but cannot change who signed it.
 #
