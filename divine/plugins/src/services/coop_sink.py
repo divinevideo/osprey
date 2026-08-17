@@ -7,6 +7,7 @@ import sentry_sdk
 from coop_payload import build_content_fields
 from coop_profile import profile_fields
 from funnelcake_profile import fetch_profile
+from media_hash import HEX64_RE
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.engine.language_types.verdicts import VerdictEffect
 from osprey.worker.lib.osprey_shared.logging import get_logger
@@ -142,6 +143,18 @@ class COOPSink(BaseOutputSink):
         """
         return content_id_for_features(features)
 
+    def _set_media_link(self, content: dict[str, Any], sha: str | None) -> None:
+        """Record the media sha and, when a relay-manager base is set, the admin
+        media-viewer link. The single writer of both fields, from either the relay
+        fetch or a detector Action's content hash. Validates the sha itself so only a
+        real 64-hex hash becomes a URL; anything else is skipped and the item is still
+        submitted (fail-open, and no caller-shaped value can reach the link)."""
+        if not sha or not HEX64_RE.match(sha):
+            return
+        content['media_sha256'] = sha
+        if self._relay_manager_base:
+            content['relay_manager_url'] = f'{self._relay_manager_base}/media/{sha}'
+
     def _submit_content(self, content_id: str, verdict: VerdictEffect, result: ExecutionResult) -> None:
         features = result.extracted_features
         wrapper_event_id = features.get('EventId', str(result.action.action_id))
@@ -164,12 +177,19 @@ class COOPSink(BaseOutputSink):
             user_type_id=self._user_type_id,
         )
 
-        # Resolve the reported content's playable media so the MRT can show the video
-        # under review. content_id is the moderated event's id, but a report/label event
-        # doesn't carry the media (it lives in that event's NIP-92 imeta tag), so fetch
-        # it from the relay. Fail-open: no relay URL, or any fetch failure/timeout, just
-        # means the item is submitted without media (never dropped, never blocked).
-        if self._relay_ws_url and 'media_url' not in content:
+        # Give the MRT the media under review, and a link to the admin viewer for content
+        # that auto-hide has already pulled from public view. Two disjoint cases:
+        if 'media_url' in content:
+            # A direct detector Action: build_content_fields already set media_url from
+            # content_id, which IS the media sha. There is no event to fetch, but the
+            # viewer link still matters most here -- detector content is exactly what
+            # auto-hide removes, and its media_url stops serving once blocked.
+            self._set_media_link(content, content_id)
+        elif self._relay_ws_url:
+            # A report/label event references the offending content by id but does not
+            # carry its media (it lives in that event's NIP-92 imeta tag), so fetch the
+            # event from the relay. Fail-open: no relay URL, or any fetch failure/timeout,
+            # just means the item is submitted without media (never dropped, never blocked).
             # Hard bound on the whole lookup, DNS and TLS handshake included, so it can
             # never reach into the COOP POST's share of the push budget above.
             media_deadline = gevent.Timeout(self.media_timeout)
@@ -182,12 +202,7 @@ class COOPSink(BaseOutputSink):
                     content['media_url'] = media_url
                 if media_thumbnail:
                     content['media_thumbnail'] = media_thumbnail
-                if media_sha256:
-                    # The raw hash, plus a link to the admin media viewer so a moderator can
-                    # see content that auto-hide has already pulled from public view.
-                    content['media_sha256'] = media_sha256
-                    if self._relay_manager_base:
-                        content['relay_manager_url'] = f'{self._relay_manager_base}/media/{media_sha256}'
+                self._set_media_link(content, media_sha256)
             except gevent.Timeout as media_timeout_exc:
                 if media_timeout_exc is not media_deadline:
                     raise  # the sink-level timeout; MultiOutputSink owns it

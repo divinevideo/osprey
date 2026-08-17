@@ -290,6 +290,42 @@ def test_no_relay_manager_url_when_no_sha(sink_module, monkeypatch):
     assert 'media_sha256' not in content
 
 
+DETECTOR_SHA = 'd' * 64
+
+
+def test_detector_item_gets_the_link_from_its_hash_without_a_relay_lookup(sink_module, monkeypatch):
+    """A direct detector Action already has media_url set from its content hash, so the
+    relay-lookup block is skipped. The card must still carry the restricted-media viewer
+    link, built from that same hash. This is the highest-value case: detector content is
+    exactly what auto-hide pulls from public view, and its media_url stops serving once
+    blocked, so without this link the moderator has nothing to click through to.
+    """
+    module, _ = sink_module
+    monkeypatch.setenv('DIVINE_RELAY_MANAGER_URL', 'https://api-relay-staging.divine.video')
+    # Relay is configured too, but the detector path must NOT fetch: it already has the sha.
+    monkeypatch.setenv('DIVINE_RELAY_WS_URL', 'ws://relay.test.invalid')
+
+    def _must_not_fetch(*a, **k):
+        raise AssertionError('detector path must not call the relay lookup')
+
+    monkeypatch.setattr(module, 'fetch_event_media_with_hash', _must_not_fetch)
+
+    captured = _drive(
+        sink_module,
+        {'DetectorContentHash': DETECTOR_SHA, 'DetectorClass': 'nsfw'},
+        action_name='ai_detector_nsfw',
+        content_id=DETECTOR_SHA,
+    )
+    content = (
+        json.loads(captured['payload'])['content']
+        if isinstance(captured['payload'], str)
+        else captured['payload']['content']
+    )
+    assert content['media_url'] == f'https://media.test.invalid/{DETECTOR_SHA}'
+    assert content['media_sha256'] == DETECTOR_SHA
+    assert content['relay_manager_url'] == f'https://api-relay-staging.divine.video/media/{DETECTOR_SHA}'
+
+
 def test_no_relay_manager_url_when_base_unset(sink_module, monkeypatch):
     """If DIVINE_RELAY_MANAGER_URL is not configured, media_sha256 is still recorded but no
     link is fabricated from a missing base."""
