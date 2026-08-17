@@ -128,6 +128,26 @@ def test_canonical_reasons_parse_finds_the_ownership_table() -> None:
     )
 
 
+def test_ownership_has_exactly_two_categories() -> None:
+    """A token is either handled by an osprey rule or owned by another system.
+
+    `default-queue` was removed as a category on 2026-08-17 because the catch-all
+    owns exactly that case: with `FirstOtherReport` matching by exclusion, "no
+    dedicated handling" is what the catch-all IS, so a third category would have
+    two contradictory meanings -- this file's `_owned_elsewhere` would treat it
+    as a reason Osprey must NOT queue (a silent drop), while test_main.py's
+    `_rule_reason_tokens` would treat it as caught by a rule (an osprey rule).
+    A new category must re-decide both derivations together, deliberately.
+    """
+    owners = set(_canonical_reasons().values())
+    assert owners <= {'osprey-rule', 'relay-manager'}, (
+        f'unknown ownership categories {sorted(owners - {"osprey-rule", "relay-manager"})} in CANONICAL_REASONS. '
+        'With the catch-all matching by exclusion, a token is either handled by an osprey '
+        'rule or owned by another system. Adding a category means re-deciding '
+        '_owned_elsewhere here and _rule_reason_tokens in test_main.py together.'
+    )
+
+
 def test_a_catch_all_exclusion_exists() -> None:
     assert _excluded(), (
         'No `ReportReason not in [...]` condition in divine/rules/rules/reports/. '

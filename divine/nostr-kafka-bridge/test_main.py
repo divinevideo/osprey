@@ -227,8 +227,11 @@ def test_routed_tokens_have_a_consuming_rule_or_external_owner():
                 f"matches ReportReason == '{token}'"
             )
         else:
-            # Routed outside Osprey: must be explicitly catalogued as such, not silent.
-            assert owner in ('relay-manager', 'default-queue'), (
+            # Routed outside Osprey: must be explicitly catalogued as relay-manager's,
+            # not silent. ('default-queue' is no longer a category -- with the catch-all
+            # matching by exclusion, "no dedicated handling" is exactly what
+            # FirstOtherReport owns, so a token is either osprey-rule or relay-manager's.)
+            assert owner == 'relay-manager', (
                 f"routed token '{token}' has no consuming rule and no external owner in CANONICAL_REASONS"
             )
 
