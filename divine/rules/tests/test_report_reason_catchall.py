@@ -27,7 +27,13 @@ import ast
 import re
 from pathlib import Path
 
-_REPORT_RULES = Path(__file__).resolve().parent.parent / 'rules' / 'reports'
+# The whole rules tree, not just rules/reports/: the catch-all fires on a reason
+# regardless of which file matched it, so a ReportReason match anywhere (a new
+# domain dir, a reports/ subdirectory) must reach this derivation. Scanning only
+# reports/ would let a match placed elsewhere double-fire with the catch-all
+# while every check here stayed green. reports/ is the convention, not a
+# correctness boundary.
+_RULES_ROOT = Path(__file__).resolve().parent.parent
 _BRIDGE_MAIN = Path(__file__).resolve().parent.parent.parent / 'nostr-kafka-bridge' / 'main.py'
 
 _EQ = re.compile(r"ReportReason\s*==\s*'([^']+)'")
@@ -36,14 +42,18 @@ _NOT_IN = re.compile(r'ReportReason\s+not\s+in\s*\[([^\]]+)\]')
 _MEMBER = re.compile(r"'([^']+)'")
 
 
+def _sml_files() -> list[Path]:
+    return sorted(_RULES_ROOT.rglob('*.sml'))
+
+
 def _rule_text() -> str:
-    """All report rules, line comments stripped.
+    """All rules in the tree, line comments stripped.
 
     Comments are stripped so a reason named in prose cannot inject a phantom
     token -- these files discuss reasons at length.
     """
     parts = []
-    for path in sorted(_REPORT_RULES.glob('*.sml')):
+    for path in _sml_files():
         parts.extend(line.split('#', 1)[0] for line in path.read_text().splitlines())
     return '\n'.join(parts)
 
@@ -92,6 +102,21 @@ def test_rule_parse_finds_the_named_rules() -> None:
     assert {'csam', 'harassment', 'nudity', 'violence'} <= matched, (
         f'ReportReason parse found {matched}; either the rules moved or the regexes no longer match'
     )
+
+
+def test_scan_covers_the_whole_rules_tree() -> None:
+    """Guard the guard, for scope: narrowing the scan back to rules/reports/ (or a
+    non-recursive glob that misses a future reports/ subdirectory) would reopen the
+    blind spot the tree-wide scan exists to close, while every check above stayed
+    green. The derivation must see every .sml under the rules root.
+    """
+    scanned = {str(p.relative_to(_RULES_ROOT)) for p in _sml_files()}
+    assert 'main.sml' in scanned, f'scan no longer reaches the rules root: {sorted(scanned)}'
+    assert any(p.startswith('rules/reports/') for p in scanned), (
+        f'scan no longer reaches rules/reports/: {sorted(scanned)}'
+    )
+    assert any(p.startswith('models/') for p in scanned), f'scan no longer reaches models/: {sorted(scanned)}'
+    assert scanned == {str(p.relative_to(_RULES_ROOT)) for p in _RULES_ROOT.rglob('*.sml')}
 
 
 def test_canonical_reasons_parse_finds_the_ownership_table() -> None:

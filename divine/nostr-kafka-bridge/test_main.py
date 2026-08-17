@@ -37,8 +37,12 @@ _spec.loader.exec_module(bridge)
 ROUTED = {'csam', 'child_safety', 'underage_user', 'nudity', 'violence', 'harassment'}
 
 # Live SML rules that actually act on report reasons. Parsed (not hand-listed) so the
-# coupling tests break the moment a routed token loses its rule.
-_RULES_DIR = Path(__file__).resolve().parent.parent / 'rules' / 'rules' / 'reports'
+# coupling tests break the moment a routed token loses its rule. The scan covers the
+# whole rules tree, not just rules/reports/: the ownership assertions below must see
+# a ReportReason match wherever it lives, or a rule in another directory would count
+# as unmatched (or as unowned) while sitting in the same bundle the catch-all fires
+# from. reports/ is the convention, not a correctness boundary.
+_RULES_DIR = Path(__file__).resolve().parent.parent / 'rules'
 
 
 def _rule_reason_tokens():
@@ -67,7 +71,7 @@ def _rule_reason_tokens():
     # positive and negated lists stay disjoint without a lookaround.
     in_list = re.compile(r'ReportReason\s+in\s*\[([^\]]+)\]')
     not_in_list = re.compile(r'ReportReason\s+not\s+in\s*\[([^\]]+)\]')
-    for path in sorted(_RULES_DIR.glob('*.sml')):
+    for path in sorted(_RULES_DIR.rglob('*.sml')):
         # Strip line comments first so a ReportReason literal inside a '#' comment
         # (e.g. an example in a docstring) cannot inject a phantom token.
         text = '\n'.join(line.split('#', 1)[0] for line in path.read_text().splitlines())
