@@ -1,9 +1,11 @@
-"""Resolve a nostr event's playable media URL from the relay for COOP review display.
+"""Resolve a nostr event's playable media URL and content hash from the relay for COOP review.
 
 COOP's Manual Review Tool renders a VIDEO field only when the submitted item carries a
 ``media_url``. A kind-1984 report / kind-1985 label references the offending content by id
 but does not carry its media, so COOPSink resolves the media by fetching the reported event
-from the relay and reading its NIP-92 ``imeta`` tag (``url <playable>`` / ``thumb <image>``).
+from the relay and reading its NIP-92 ``imeta`` tag (``url <playable>`` / ``thumb <image>``),
+plus the same tag's ``x <sha256>`` field (top-level ``x`` tag as fallback) for the
+restricted-media viewer link.
 
 Everything here is FAIL-OPEN: any error, timeout, or missing field yields all-``None`` (a
 ``(None, None)`` pair, or a ``(None, None, None)`` triple on the with-hash path) so the COOP
@@ -28,21 +30,42 @@ _MAX_FRAMES = 64
 _DEFAULT_TIMEOUT = 3.0
 
 
-def media_from_event(event: Any) -> tuple[str | None, str | None]:
-    """Return ``(media_url, thumbnail_url)`` from an event's first ``imeta`` tag with a url.
+def _media_triple_from_event(event: Any) -> tuple[str | None, str | None, str | None]:
+    """Return ``(media_url, thumbnail_url, media_sha)`` from one event.
 
-    Raw parse; no URL validation (the caller filters). Never raises; returns ``(None, None)``
+    url, thumb and the sha come from the SAME imeta tag (the first with a url)
+    so all three describe one piece of media by construction, never a mix of two
+    imeta entries. The sha falls back to a top-level ``x`` tag (NIP-94-style
+    events) when that imeta carries no valid hash, and survives even when no
+    imeta has a url: the viewer link is worth more than the playable URL, which
+    stops serving once the media is blocked.
+
+    Divine's publishers put the hash inside imeta (``x <sha>``), not in a
+    top-level tag — see divine-mobile's video_event_publisher and this repo's
+    label_routing.sml ("the publishing side sets the imeta `x` tag
+    unconditionally") — so the imeta field is the primary source and the
+    top-level tag only catches foreign event shapes.
+
+    Raw parse; no URL validation (the caller filters). Never raises; all-``None``
     for anything malformed.
     """
+    top_level_sha: str | None = None
     try:
         tags = event.get('tags') if isinstance(event, dict) else None
         if not isinstance(tags, list):
-            return None, None
+            return None, None, None
+        for tag in tags:
+            if isinstance(tag, list) and len(tag) >= 2 and tag[0] == 'x' and isinstance(tag[1], str):
+                candidate = tag[1].strip().lower()
+                if HEX64_RE.match(candidate):
+                    top_level_sha = candidate
+                    break
         for tag in tags:
             if not isinstance(tag, list) or len(tag) < 2 or tag[0] != 'imeta':
                 continue
             url: str | None = None
             thumb: str | None = None
+            imeta_sha: str | None = None
             for field in tag[1:]:
                 if not isinstance(field, str):
                     continue
@@ -52,32 +75,36 @@ def media_from_event(event: Any) -> tuple[str | None, str | None]:
                     thumb = field[6:].strip()
                 elif field.startswith('image ') and thumb is None:
                     thumb = field[6:].strip()
+                elif field.startswith('x ') and imeta_sha is None:
+                    candidate = field[2:].strip().lower()
+                    if HEX64_RE.match(candidate):
+                        imeta_sha = candidate
             if url:
-                return url, thumb
+                return url, thumb, imeta_sha if imeta_sha is not None else top_level_sha
     except Exception:
         pass
-    return None, None
+    return None, None, top_level_sha
+
+
+def media_from_event(event: Any) -> tuple[str | None, str | None]:
+    """Return ``(media_url, thumbnail_url)`` from an event's first ``imeta`` tag with a url.
+
+    Raw parse; no URL validation (the caller filters). Never raises; returns ``(None, None)``
+    for anything malformed.
+    """
+    return _media_triple_from_event(event)[:2]
 
 
 def media_hash_from_event(event: object) -> str | None:
-    """Return the media sha256 from an event's top-level ``x`` tag, or ``None``.
+    """Return the event's media sha256, or ``None``.
 
-    The moderated event carries its content hash in a blossom/NIP-94 ``x`` tag. Used to
-    build the Coop card's relay_manager_url media link. Fail-open: any malformed input
-    yields ``None``. Normalised to lowercase so the link matches the proxy's key.
+    Primary source is the ``x`` field of the imeta tag that also carries the
+    media url (NIP-92); a top-level ``x`` tag (blossom/NIP-94 shape) is the
+    fallback. Used to build the Coop card's relay_manager_url media link.
+    Fail-open: any malformed input yields ``None``. Normalised to lowercase so
+    the link matches the proxy's key.
     """
-    try:
-        tags = event.get('tags') if isinstance(event, dict) else None
-        if not isinstance(tags, list):
-            return None
-        for tag in tags:
-            if isinstance(tag, list) and len(tag) >= 2 and tag[0] == 'x' and isinstance(tag[1], str):
-                candidate = tag[1].strip().lower()
-                if HEX64_RE.match(candidate):
-                    return candidate
-    except Exception:
-        pass
-    return None
+    return _media_triple_from_event(event)[2]
 
 
 def _is_http_url(value: str | None) -> bool:
@@ -139,28 +166,32 @@ def fetch_event_media(
     event = _fetch_raw_event(relay_url, event_id, timeout)
     if event is None:
         return None, None
-    # media_from_event / _is_http_url run OUTSIDE _fetch_raw_event's try/except; both self-guard
-    # against malformed input, which is what keeps this wrapper's fail-open contract intact.
-    url, thumb = media_from_event(event)
+    # One parse for both fields; _is_http_url runs OUTSIDE _fetch_raw_event's try/except
+    # and self-guards against malformed input, which is what keeps this wrapper's
+    # fail-open contract intact.
+    url, thumb, _ = _media_triple_from_event(event)
     return (url if _is_http_url(url) else None, thumb if _is_http_url(thumb) else None)
 
 
 def fetch_event_media_with_hash(
     relay_url: str, event_id: str, timeout: float = _DEFAULT_TIMEOUT
 ) -> tuple[str | None, str | None, str | None]:
-    """Like ``fetch_event_media`` but also returns the media sha256 from the event's ``x`` tag.
+    """Like ``fetch_event_media`` but also returns the event's media sha256.
 
-    One relay round-trip. Fail-open: ``(None, None, None)`` on any failure. The sha powers the
-    Coop card's relay_manager_url link to the restricted-media viewer.
+    One relay round-trip and one parse: url, thumb and sha come from the same
+    imeta tag, so the viewer link names the exact media the card plays. Fail-open:
+    ``(None, None, None)`` on any failure. The sha powers the Coop card's
+    relay_manager_url link to the restricted-media viewer.
     """
     event = _fetch_raw_event(relay_url, event_id, timeout)
     if event is None:
         return None, None, None
-    # media_from_event / _is_http_url / media_hash_from_event all run OUTSIDE the fetch's
-    # try/except; each self-guards, which is what keeps this wrapper's fail-open contract intact.
-    url, thumb = media_from_event(event)
+    # _media_triple_from_event / _is_http_url all run OUTSIDE the fetch's
+    # try/except; each self-guards, which is what keeps this wrapper's fail-open
+    # contract intact.
+    url, thumb, sha = _media_triple_from_event(event)
     return (
         url if _is_http_url(url) else None,
         thumb if _is_http_url(thumb) else None,
-        media_hash_from_event(event),
+        sha,
     )

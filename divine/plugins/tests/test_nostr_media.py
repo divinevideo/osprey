@@ -271,11 +271,25 @@ def test_fetch_does_not_wait_for_the_peers_close_frame(monkeypatch):
 
 # --------------------------------------------------------------------------- #
 # media_hash_from_event / fetch_event_media_with_hash: the sha for the Coop
-# relay_manager_url media link. The moderated event carries its media hash in a
-# top-level `x` tag (blossom / NIP-94). Same fail-open contract: never raises.
+# relay_manager_url media link. Divine's publishers put the hash inside the
+# imeta tag's `x <sha>` field (see divine-mobile video_event_publisher and this
+# repo's label_routing.sml); a top-level `x` tag (blossom / NIP-94) is the
+# fallback for foreign event shapes. Same fail-open contract: never raises.
 # --------------------------------------------------------------------------- #
 
 _SHA = 'b' * 64
+_SHA_2 = 'c' * 64
+
+
+def test_media_hash_from_imeta_x_field():
+    """The real divine video-event shape: sha inside imeta, no top-level x tag."""
+    ev = {'tags': [_imeta('url https://m/v.mp4', f'x {_SHA}')]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_imeta_x_is_lowercased():
+    ev = {'tags': [_imeta('url https://m/v.mp4', f'x {_SHA.upper()}')]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA
 
 
 def test_media_hash_from_top_level_x_tag():
@@ -288,8 +302,37 @@ def test_media_hash_lowercased_and_validated():
     assert nostr_media.media_hash_from_event(ev) == _SHA  # normalised to lowercase
 
 
+def test_media_hash_imeta_x_wins_over_top_level_x():
+    """The imeta x names the bytes behind the card's media_url; a stray top-level
+    x about other bytes must not hijack the viewer link."""
+    ev = {'tags': [['x', _SHA_2], _imeta('url https://m/v.mp4', f'x {_SHA}')]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_from_same_imeta_as_the_url():
+    """Multiple imetas: url comes from the first with a url, and the sha must
+    come from that SAME imeta, not from any later one."""
+    ev = {
+        'tags': [
+            _imeta('m video/mp4'),  # no url: skipped
+            _imeta('url https://m/a.mp4', f'x {_SHA}'),
+            _imeta('url https://m/b.mp4', f'x {_SHA_2}'),
+        ]
+    }
+    assert nostr_media.media_from_event(ev) == ('https://m/a.mp4', None)
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_top_level_x_survives_without_any_url():
+    """No imeta with a url (NIP-94 shape): no playable url, but the viewer link
+    still matters — it is the only thing left to click once media is blocked."""
+    ev = {'tags': [['x', _SHA]]}
+    assert nostr_media.media_from_event(ev) == (None, None)
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
 def test_media_hash_none_when_x_tag_absent_or_junk():
-    assert nostr_media.media_hash_from_event({'tags': [['imeta', 'url https://m/v.mp4']]}) is None
+    assert nostr_media.media_hash_from_event({'tags': [_imeta('url https://m/v.mp4')]}) is None
     assert nostr_media.media_hash_from_event({'tags': [['x', 'not-a-hash']]}) is None
     assert nostr_media.media_hash_from_event({'tags': 'bogus'}) is None
     assert nostr_media.media_hash_from_event(None) is None
@@ -299,6 +342,21 @@ def test_fetch_with_hash_returns_url_thumb_and_sha(monkeypatch):
     _patch_ws(
         monkeypatch,
         _FakeWS([_event_frame([['x', _SHA], _imeta('url https://m/v.mp4', 'thumb https://m/t.jpg')])]),
+    )
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (
+        'https://m/v.mp4',
+        'https://m/t.jpg',
+        _SHA,
+    )
+
+
+def test_fetch_with_hash_resolves_the_sha_from_imeta_alone(monkeypatch):
+    """The real divine shape end to end: no top-level x tag anywhere, sha inside
+    imeta. Before the imeta parse existed this returned (url, thumb, None) and
+    the report/label path never got a viewer link."""
+    _patch_ws(
+        monkeypatch,
+        _FakeWS([_event_frame([_imeta('url https://m/v.mp4', 'thumb https://m/t.jpg', f'x {_SHA}')])]),
     )
     assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (
         'https://m/v.mp4',
