@@ -16,6 +16,7 @@ from reported_author import (  # noqa: E402
     content_id_for_features,
     extract_author,
     normalize_event_id,
+    reported_account_only,
     resolve_author,
 )
 
@@ -602,3 +603,40 @@ def test_content_id_falls_back_to_the_event_itself_for_direct_content():
 
 def test_content_id_is_none_when_nothing_identifies_the_content():
     assert content_id_for_features({'Kind': 1984}) is None
+
+
+# --- reported_account_only: the profile-only report resolver ---
+
+REPORTED_ACCOUNT = 'e' * 64
+
+
+def test_profile_only_report_returns_the_reported_pubkey():
+    f = {'Kind': 1984, 'ReportedPubkey': REPORTED_ACCOUNT, 'ReportedEventId': ''}
+    assert reported_account_only(f) == REPORTED_ACCOUNT
+
+
+def test_content_report_with_an_event_is_not_account_only():
+    f = {'Kind': 1984, 'ReportedPubkey': REPORTED_ACCOUNT, 'ReportedEventId': EVENT_ID}
+    assert reported_account_only(f) is None
+
+
+def test_a_label_is_not_account_only():
+    assert reported_account_only({'Kind': 1985, 'ReportedPubkey': REPORTED_ACCOUNT}) is None
+
+
+def test_junk_reported_pubkey_returns_none():
+    f = {'Kind': 1984, 'ReportedPubkey': 'not-hex', 'ReportedEventId': ''}
+    assert reported_account_only(f) is None
+
+
+def test_reported_pubkey_is_normalized_lowercase():
+    f = {'Kind': 1984, 'ReportedPubkey': REPORTED_ACCOUNT.upper(), 'ReportedEventId': ''}
+    assert reported_account_only(f) == REPORTED_ACCOUNT
+
+
+def test_missing_reported_pubkey_returns_none():
+    assert reported_account_only({'Kind': 1984, 'ReportedEventId': ''}) is None
+
+
+def test_non_dict_features_return_none():
+    assert reported_account_only(None) is None

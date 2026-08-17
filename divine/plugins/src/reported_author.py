@@ -311,3 +311,26 @@ def content_id_for_features(features: Any) -> Optional[str]:
     if detector_hash:
         return detector_hash
     return None
+
+
+def reported_account_only(features: Any) -> Optional[str]:
+    """The reported account of a PROFILE-ONLY report, or None.
+
+    A NIP-56 report can target an ACCOUNT (a `p` tag) with NO content event (no
+    `e` tag). That is the one case where the thing to queue is the account itself,
+    not a content event. Returns the normalized reported pubkey when this is such a
+    report; None for content reports (they carry a ReportedEventId), for labels,
+    and for non-hex input.
+
+    Keyed on `Kind` for the same reason as `content_id_for_features`: presence of
+    optional features is unsound. `ReportedPubkey` is the reporter-controlled p-tag,
+    so it is hex64-validated before it can become a COOP item id -- a junk value
+    must be no account, not a fabricated one a moderator could then act on.
+    """
+    if not isinstance(features, dict):
+        return None
+    if _kind(features.get('Kind')) != REPORT_KIND:
+        return None
+    if _hex64(features.get('ReportedEventId')):
+        return None
+    return _hex64(features.get('ReportedPubkey')) or None
