@@ -359,14 +359,18 @@ class COOPSink(BaseOutputSink):
         Fail-open and best-effort: a failure here costs the panel's detail, never the
         review item.
         """
-        # `pubkey` is declared required on nostr_user, so it goes in unconditionally;
-        # the profile fields are omitted individually when unknown.
-        data: dict[str, Any] = {'pubkey': pubkey}
-        data.update(user_item_fields(body, error=error))
-
-        payload = {'items': [{'id': pubkey, 'typeId': self._user_type_id, 'data': data}]}
-
+        # Building the payload sits INSIDE the try with the POST. `fetch_profile`
+        # already guarantees a validated dict or None, so nothing here should raise --
+        # but that is a promise made in another module, and the fail-open guarantee is
+        # worth more as structure than as a cross-module contract.
         try:
+            # `pubkey` is declared required on nostr_user, so it goes in
+            # unconditionally; the profile fields are omitted individually when unknown.
+            data: dict[str, Any] = {'pubkey': pubkey}
+            data.update(user_item_fields(body, error=error))
+
+            payload = {'items': [{'id': pubkey, 'typeId': self._user_type_id, 'data': data}]}
+
             resp = requests.post(
                 f'{self._url}/api/v1/items/async/',
                 json=payload,
