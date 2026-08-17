@@ -33,21 +33,23 @@ _DEFAULT_TIMEOUT = 3.0
 def _media_triple_from_event(event: Any) -> tuple[str | None, str | None, str | None]:
     """Return ``(media_url, thumbnail_url, media_sha)`` from one event.
 
-    url, thumb and the sha come from the SAME imeta tag (the first with a url)
-    so all three describe one piece of media by construction, never a mix of two
-    imeta entries. The sha falls back to a top-level ``x`` tag (NIP-94-style
-    events) when that imeta carries no valid hash, and survives even when no
-    imeta has a url: the viewer link is worth more than the playable URL, which
-    stops serving once the media is blocked.
+    When any imeta tag has a url, that SAME tag supplies the thumb and the sha, so
+    all three describe one piece of media by construction. The sha from that imeta
+    is never substituted from elsewhere: an event whose imeta names a playable url
+    but carries no hash simply has no sha, because a top-level ``x`` tag on such an
+    event could name other bytes (the reported event is authored by the person
+    under moderation, and a card whose media_url plays A while its viewer link
+    shows B is worse than a card with no link).
 
-    Divine's publishers put the hash inside imeta (``x <sha>``), not in a
-    top-level tag — see divine-mobile's video_event_publisher and this repo's
-    label_routing.sml ("the publishing side sets the imeta `x` tag
-    unconditionally") — so the imeta field is the primary source and the
-    top-level tag only catches foreign event shapes.
+    The top-level ``x`` tag is read only in the NIP-94 shape, where NO imeta
+    carries a url: there the event itself is file metadata keyed by the hash, so
+    the tag is the only source and nothing can mismatch. Divine's publishers put
+    the hash inside imeta (``x <sha>``) — see divine-mobile's
+    video_event_publisher and this repo's label_routing.sml — so divine events
+    never take the NIP-94 branch.
 
     Raw parse; no URL validation (the caller filters). Never raises; all-``None``
-    for anything malformed.
+    for anything malformed, including a parse that failed partway through.
     """
     top_level_sha: str | None = None
     try:
@@ -80,10 +82,11 @@ def _media_triple_from_event(event: Any) -> tuple[str | None, str | None, str | 
                     if HEX64_RE.match(candidate):
                         imeta_sha = candidate
             if url:
-                return url, thumb, imeta_sha if imeta_sha is not None else top_level_sha
+                return url, thumb, imeta_sha
+        return None, None, top_level_sha
     except Exception:
         pass
-    return None, None, top_level_sha
+    return None, None, None
 
 
 def media_from_event(event: Any) -> tuple[str | None, str | None]:
@@ -99,8 +102,9 @@ def media_hash_from_event(event: object) -> str | None:
     """Return the event's media sha256, or ``None``.
 
     Primary source is the ``x`` field of the imeta tag that also carries the
-    media url (NIP-92); a top-level ``x`` tag (blossom/NIP-94 shape) is the
-    fallback. Used to build the Coop card's relay_manager_url media link.
+    media url (NIP-92); a top-level ``x`` tag is read only when no imeta carries
+    a url (the NIP-94 file-metadata shape, where the tag is the event's own
+    key). Used to build the Coop card's relay_manager_url media link.
     Fail-open: any malformed input yields ``None``. Normalised to lowercase so
     the link matches the proxy's key.
     """
@@ -121,7 +125,11 @@ def _is_http_url(value: str | None) -> bool:
 def _fetch_raw_event(relay_url: str, event_id: str, timeout: float = _DEFAULT_TIMEOUT) -> Any | None:
     """Fetch a single event by id from the relay and return its dict, or ``None``.
 
-    Returns the raw, unvalidated event JSON (``Any``): callers own field validation.
+    Only an EVENT frame whose event id equals the requested ``event_id`` is
+    accepted, so the relay cannot substitute a different stored event.
+
+    Returns the raw, otherwise-unvalidated event JSON (``Any``): callers own
+    field validation.
 
     Holds the whole fail-open contract: empty input, connect/read failure, timeout, or
     not-found all yield ``None``. Never raises. ``timeout`` is a wall-clock budget for the
@@ -143,7 +151,13 @@ def _fetch_raw_event(relay_url: str, event_id: str, timeout: float = _DEFAULT_TI
             if not isinstance(msg, list) or len(msg) < 2 or msg[1] != _SUB:
                 continue  # NOTICE / another subscription / junk frame
             if msg[0] == 'EVENT' and len(msg) >= 3:
-                return msg[2]
+                # Bind the answer to the request, as reported_author.extract_author
+                # does: a relay answering with a different stored event must not
+                # choose what the moderation card plays or links to.
+                candidate = msg[2]
+                if isinstance(candidate, dict) and candidate.get('id') == event_id:
+                    return candidate
+                continue
             if msg[0] in ('EOSE', 'CLOSED'):
                 return None
     except Exception:
