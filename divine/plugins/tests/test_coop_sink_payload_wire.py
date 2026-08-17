@@ -155,6 +155,29 @@ def _drive(sink_module, features, action_name='nostr_kind_1984', content_id=CONT
     return captured
 
 
+def _drive_push(sink_module, features, action_name='nostr_kind_1984', verdict='flag_for_review'):
+    """Drive the REAL push(), which decides content-vs-account routing.
+
+    _drive above calls _submit_content directly; the profile-only branch lives in
+    push(), so it needs its own driver that exercises the decision, not just the
+    content assembler.
+    """
+    module, captured = sink_module
+
+    class _Action:
+        action_id = 7
+
+    _Action.action_name = action_name
+
+    class _Result:
+        action = _Action()
+        extracted_features = features
+        verdicts = [_VerdictEffect(verdict)]
+
+    module.COOPSink().push(_Result())
+    return captured
+
+
 def _call_to(captured, suffix):
     """The single POST whose URL ends with `suffix`, or None.
 
@@ -508,3 +531,76 @@ def test_the_user_item_payload_is_json_serialisable(sink_module, monkeypatch):
     _with_profile(sink_module, monkeypatch)
     captured = _drive(sink_module, _report_features())
     json.dumps(_user_item_call(captured)['payload'])
+
+
+# --- profile-only reports: the account IS the review item -----------------------
+
+WRAPPER_1984 = '11' * 32
+
+
+def test_profile_only_report_submits_a_user_item_and_no_content(sink_module, monkeypatch):
+    """A `p`-tag-only report (no `e` tag) queues the reported ACCOUNT as a
+    nostr_user item carrying report_reason, and never submits the report event as
+    content."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1786637235,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': '',
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert _call_to(captured, '/api/v1/content') is None, 'a profile-only report has no content event to submit'
+    user = _user_item_call(captured)
+    assert user is not None, 'the reported account must be queued as a nostr_user item'
+    item = user['payload']['items'][0]
+    assert item['id'] == AUTHOR
+    assert item['typeId'] == 'nostr-user-type'
+    assert item['data']['pubkey'] == AUTHOR
+    assert item['data']['report_reason'] == 'spam'
+
+
+def test_content_report_is_unchanged_by_the_profile_only_branch(sink_module):
+    """A report that DOES carry an event id still takes the content path."""
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedAuthorPubkey': AUTHOR,
+            'ReportedEventId': CONTENT_ID,
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert _content_call(captured) is not None
+
+
+def test_profile_only_report_without_user_type_id_is_not_queued(sink_module, monkeypatch):
+    """No nostr_user type id means no correct place to put the account, so the
+    report is dropped (loud WARNING) rather than mis-shaped as content."""
+    monkeypatch.delenv('DIVINE_COOP_USER_TYPE_ID', raising=False)
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': '',
+            # EventId present on purpose: without the profile-only branch the sink
+            # would fall back to it as a content id and POST the report event as
+            # content, so this test would pass vacuously on a None content id.
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert captured['calls'] == [], 'nothing should be POSTed when the user type id is unset'
