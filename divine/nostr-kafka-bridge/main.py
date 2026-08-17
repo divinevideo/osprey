@@ -91,18 +91,24 @@ _published_count = 0
 # We must alias BOTH spellings or the report falls through to General Review and
 # misses the SML auto-hide/threshold rules.
 #
-# CANONICAL_REASONS is the SINGLE SOURCE OF TRUTH for the tokens this bridge emits
-# and who owns each one downstream. Every _REASON_ALIASES value must be a key here,
-# and nothing should emit a token that is not catalogued here. Ownership drives where
-# a report is acted on:
-#   'osprey-rule'   -- a divine/rules/rules/reports/*.sml rule matches
-#                      ReportReason == <token> and emits an actionable verdict
-#                      (auto-hide / flag-for-review / threshold).
+# CANONICAL_REASONS is the catalogue of the reason tokens this bridge KNOWS it
+# emits and who owns each one downstream. Every _REASON_ALIASES value must be a
+# key here. It is not a closed vocabulary: _normalize_report_reason passes an
+# unrecognised token through unchanged, so a reason a client ships without an
+# entry here still reaches the rules -- FirstOtherReport (first_report_review.sml)
+# matches by exclusion and queues anything no other owner handles. Ownership has
+# exactly two values:
+#   'osprey-rule'   -- a divine/rules/rules/reports/*.sml rule matches the token
+#                      and emits an actionable verdict (auto-hide /
+#                      flag-for-review / threshold), by name or via the
+#                      exclusion-based catch-all.
 #   'relay-manager' -- handled by the relay-manager ReportWatcher + Zendesk path,
-#                      NOT Osprey (e.g. age review's 15-day clock). Osprey has no
-#                      rule for it by design.
-#   'default-queue' -- no dedicated handling; falls to COOP General Review for a
-#                      human to triage.
+#                      NOT Osprey (e.g. age review's 15-day clock). Osprey must
+#                      not queue it, so the catch-all excludes it.
+# 'default-queue' stopped being a category on 2026-08-17: with the catch-all,
+# "no dedicated handling" is exactly what FirstOtherReport owns, so a token is
+# either handled by an osprey rule or owned by another system -- there is no
+# third kind.
 # The coupling tests in test_main.py parse the live .sml rules and fail if an
 # 'osprey-rule' token has no matching rule, if a rule references a token not
 # catalogued here, or if an alias resolves to a non-canonical token -- so this
@@ -114,7 +120,7 @@ CANONICAL_REASONS = {
     'harassment': 'osprey-rule',  # FirstHarassmentReport -> human review queue
     'nudity': 'osprey-rule',  # first/threshold sexual-content rules
     'violence': 'osprey-rule',  # first/threshold violence rules
-    'ai_generated': 'osprey-rule',  # service and ordinary-reporter rules
+    'ai_generated': 'osprey-rule',  # ordinary-reporter rule (FirstAiGeneratedReport); the service-signed 1984 path was retired 2026-08-16
     'underage_user': 'relay-manager',  # age review: ReportWatcher 15-day clock + Zendesk, not Osprey
     'spam': 'osprey-rule',  # FirstSpamReport -> General Review
     'impersonation': 'osprey-rule',  # FirstImpersonationReport -> General Review

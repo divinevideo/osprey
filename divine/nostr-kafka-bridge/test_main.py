@@ -37,27 +37,51 @@ _spec.loader.exec_module(bridge)
 ROUTED = {'csam', 'child_safety', 'underage_user', 'nudity', 'violence', 'harassment'}
 
 # Live SML rules that actually act on report reasons. Parsed (not hand-listed) so the
-# coupling tests break the moment a routed token loses its rule.
-_RULES_DIR = Path(__file__).resolve().parent.parent / 'rules' / 'rules' / 'reports'
+# coupling tests break the moment a routed token loses its rule. The scan covers the
+# whole rules tree, not just rules/reports/: the ownership assertions below must see
+# a ReportReason match wherever it lives, or a rule in another directory would count
+# as unmatched (or as unowned) while sitting in the same bundle the catch-all fires
+# from. reports/ is the convention, not a correctness boundary.
+_RULES_DIR = Path(__file__).resolve().parent.parent / 'rules'
 
 
 def _rule_reason_tokens():
     """Every report_reason token an SML rule in divine/rules matches on.
 
-    Reads the live .sml files and pulls tokens from both `ReportReason == 'x'` and
+    Reads the live .sml files and pulls tokens from the `ReportReason == 'x'` and
     `ReportReason in ['x', 'y']` forms, so the check reflects the rules as they are
     rather than a second maintained list.
+
+    FirstOtherReport is the catch-all and matches by EXCLUSION
+    (`ReportReason not in [...]`), so naming it in a positive form is impossible:
+    it covers every reason except the ones another owner handles. Any canonical
+    token outside that exclusion list is therefore matched by it, and is added
+    here. Without this, the catch-all reads as matching nothing and the coupling
+    tests below report 'other' as ruleless.
+
+    Both directions fail closed. If the negated form stops parsing, `excluded` is
+    empty, nothing is added, and test_osprey_rule_tokens_actually_have_a_rule goes
+    red on 'other'. If the exclusion list drops a token another system owns,
+    test_rule_tokens_are_owned_by_osprey goes red on it.
     """
     tokens = set()
+    excluded = set()
     eq = re.compile(r"ReportReason\s*==\s*'([^']+)'")
+    # `\s+in` cannot match the `not in` form (the word between is 'not'), so the
+    # positive and negated lists stay disjoint without a lookaround.
     in_list = re.compile(r'ReportReason\s+in\s*\[([^\]]+)\]')
-    for path in sorted(_RULES_DIR.glob('*.sml')):
+    not_in_list = re.compile(r'ReportReason\s+not\s+in\s*\[([^\]]+)\]')
+    for path in sorted(_RULES_DIR.rglob('*.sml')):
         # Strip line comments first so a ReportReason literal inside a '#' comment
         # (e.g. an example in a docstring) cannot inject a phantom token.
         text = '\n'.join(line.split('#', 1)[0] for line in path.read_text().splitlines())
         tokens.update(eq.findall(text))
         for group in in_list.findall(text):
             tokens.update(re.findall(r"'([^']+)'", group))
+        for group in not_in_list.findall(text):
+            excluded.update(re.findall(r"'([^']+)'", group))
+    if excluded:
+        tokens |= set(bridge.CANONICAL_REASONS) - excluded
     return tokens
 
 
@@ -203,8 +227,11 @@ def test_routed_tokens_have_a_consuming_rule_or_external_owner():
                 f"matches ReportReason == '{token}'"
             )
         else:
-            # Routed outside Osprey: must be explicitly catalogued as such, not silent.
-            assert owner in ('relay-manager', 'default-queue'), (
+            # Routed outside Osprey: must be explicitly catalogued as relay-manager's,
+            # not silent. ('default-queue' is no longer a category -- with the catch-all
+            # matching by exclusion, "no dedicated handling" is exactly what
+            # FirstOtherReport owns, so a token is either osprey-rule or relay-manager's.)
+            assert owner == 'relay-manager', (
                 f"routed token '{token}' has no consuming rule and no external owner in CANONICAL_REASONS"
             )
 

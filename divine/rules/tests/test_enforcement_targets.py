@@ -17,10 +17,14 @@ the signature either (see divine/plugins/src/reported_author.py). They are
 relay-attested, not proven. The distinction this file enforces is therefore
 event-record-derived versus reporter-asserted, which is the line that actually holds.
 
-The escalation ladder in behavioral/repeat_offender.sml turns account labels into
-that same ban, so the ladder's labels are held to the same standard. `labels.yaml` is
-the enforcing gate (`valid_for`); the call sites are checked here too so a widened
-`valid_for` and a new call site each fail on their own.
+The escalation ladder that turned account labels into that same ban
+(behavioral/repeat_offender.sml) was removed on 2026-08-16, so no rule writes a ladder
+label today and the escalation check below has nothing live to look at. The labels stay
+declared in `labels.yaml` as the vocabulary a real strike system will reuse
+(support-trust-safety #64), and the check stays here for when one lands, guarded by an
+inline positive control so it fails rather than going quiet if the parsing drifts.
+`labels.yaml` is the enforcing gate (`valid_for`); the call sites are checked here too so
+a widened `valid_for` and a new call site each fail on their own.
 
 Parsed from the live .sml files rather than a maintained list, so a new rule that
 enforces against a reporter-asserted value fails here instead of shipping.
@@ -45,7 +49,7 @@ _FIRST_REPORT_RULES = _RULES_ROOT / 'rules' / 'reports' / 'first_report_review.s
 # Anything else is reporter- or label-supplied and must not reach an account ban.
 _ALLOWED_PUBKEY_ARGS = {"''", '""', 'Pubkey', 'ReportedAuthorPubkey'}
 
-# Labels behavioral/repeat_offender.sml escalates on, ending in BanNostrEvent.
+# Labels the removed escalation ladder wrote, retained as vocabulary for s-t-s #64.
 _LADDER_LABELS = {'warned', 'suspended', 'banned'}
 
 _PUBKEY_ARG = re.compile(r'\bpubkey\s*=\s*([^,)]+)')
@@ -188,12 +192,22 @@ def test_trusted_auto_hide_dedups_later_first_report_enforcement():
     assert "not HasLabel(entity=ReportedEventId, label='auto_hidden')" not in first
 
 
+def _is_ladder_violation(entity, label):
+    """The one predicate both the check below and its positive control apply.
+
+    Extracted so the control exercises the REAL condition rather than a copy of
+    it: inlined in both places, changing one and not the other left the control
+    passing while the check it guards had drifted.
+    """
+    return label in _LADDER_LABELS and entity is not None and entity.startswith('Reported')
+
+
 def test_escalation_labels_are_not_applied_to_reported_entities():
     """The ladder ends in an account ban, so its labels need the same provenance."""
     offenders = [
         f'{_rel(path)}: LabelAdd(entity={entity}, label={label!r})'
         for path, entity, label in _label_adds()
-        if label in _LADDER_LABELS and entity.startswith('Reported')
+        if _is_ladder_violation(entity, label)
     ]
     assert not offenders, f'escalation-ladder labels may only be applied to an event-derived entity; found {offenders}'
 
@@ -215,4 +229,40 @@ def test_escalation_labels_are_not_valid_for_reported_entities():
     ]
     assert not offenders, (
         f'escalation-ladder labels must not be valid for a reporter-supplied entity; found {offenders}'
+    )
+
+
+# The ladder that wrote these labels was deleted on 2026-08-16 (see
+# support-trust-safety s-t-s #64), so the tree has no ladder-label writes and the
+# check below passes trivially. This proves the matcher can still see a violation,
+# so a parser that drifted fails HERE rather than going quiet there. Keep it for
+# when a real strike system lands.
+_LADDER_FIXTURE = "LabelAdd(entity=ReportedPubkey, label='suspended')"
+
+
+def test_escalation_label_matcher_still_detects_a_violation() -> None:
+    entity_match = _ENTITY_ARG.search(_LADDER_FIXTURE)
+    label_match = _LABEL_ARG.search(_LADDER_FIXTURE)
+    assert entity_match and label_match, (
+        f'_ENTITY_ARG/_LABEL_ARG no longer parse {_LADDER_FIXTURE!r}, so every LabelAdd '
+        f'in the tree now reads as entity=None/label=None and the checks above are vacuous.'
+    )
+    assert _is_ladder_violation(entity_match.group(1), label_match.group(1)), (
+        '_is_ladder_violation no longer flags a ladder label on a reporter-supplied '
+        'entity, so test_escalation_labels_are_not_applied_to_reported_entities is vacuous.'
+    )
+
+
+def test_label_scan_covers_both_models_and_rules():
+    """Guard against a SCOPING drift rather than a predicate one.
+
+    Narrowing _sml_files() or _label_adds() to skip a subtree would leave every
+    check above green while silently not looking there. Assert the scan still
+    reaches both halves of the tree.
+    """
+    scanned = {str(_rel(path)) for path in _sml_files()}
+    assert any(p.startswith('models/') for p in scanned), f'scan no longer reaches models/: {sorted(scanned)}'
+    assert any(p.startswith('rules/') for p in scanned), f'scan no longer reaches rules/: {sorted(scanned)}'
+    assert scanned == {str(p.relative_to(_RULES_ROOT)) for p in _RULES_ROOT.rglob('*.sml')}, (
+        '_sml_files() no longer returns every .sml under the rules root'
     )

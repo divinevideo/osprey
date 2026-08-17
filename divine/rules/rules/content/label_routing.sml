@@ -10,12 +10,11 @@
 # event is published to the relay. The bridge extracts label fields
 # and Osprey evaluates them here.
 #
-# The ai_classification.sml rules (via CheckModerationResult UDF) are
-# a secondary path that checks the moderation API directly for video
-# events that may not have label events yet.
-#
-# See also: reports/moderation_service.sml for kind 1984 automated
-# reports (separate flow, different tag structure).
+# This is now the ONLY path moderation-service output takes into Osprey.
+# ai_classification.sml (via the CheckModerationResult UDF) and
+# reports/moderation_service.sml (kind 1984) were both removed on 2026-08-16:
+# the first duplicated enforcement moderation-service already performs, and
+# the second matched an event kind that never reaches the relay Osprey reads.
 #
 # Security: all rules gate on LabelSignerPubkey matching the trusted
 # moderation identity. The LabelSource metadata field is user-controlled
@@ -434,10 +433,11 @@ WhenRules(
   rules_any=[RejectedLabel],
   then=[
     LabelAdd(entity=LabelTargetEventEntity, label='human_reviewed'),
-    # Also the media. ai_classification reads VideoHashEntity (MediaHash), not
-    # ReportedEventId; a target-only write leaves the AI path free to re-decide
-    # the same blob under this or another event id. Same entity the targetless
-    # reject path writes below.
+    # Also the media. The clearance belongs to the blob, not just to this one event
+    # id, so a target-only write would leave the same media undecided everywhere it
+    # appears. The reader that made this urgent (ai_classification.sml, which keyed on
+    # VideoHashEntity) was removed on 2026-08-16; the write stays as the durable record.
+    # Same entity the targetless reject path writes below.
     LabelAdd(entity=LabelContentHashEntity, label='human_reviewed'),
     DeclareVerdict(verdict='approve'),
   ],
@@ -448,9 +448,11 @@ WhenRules(
 # path publishes exactly this label, and it matched nothing, so the clearance left
 # no trace anywhere in Osprey.
 #
-# The MediaHash write in the WhenRules below is what stops automated
-# re-classification: ai_classification.sml guards AgeRestricted, NeedsReview,
-# and PermanentBan on human_reviewed against VideoHashEntity.
+# The MediaHash write in the WhenRules below records the clearance against the
+# media rather than the event. Its original reader, ai_classification.sml, was
+# removed on 2026-08-16, so nothing consumes it today -- it is kept as the
+# durable record that a human decided about this media, which outlives any one
+# event id and is the guard a future classifier would need.
 RejectedLabelNullTarget = Rule(
   when_all=[
     Kind == 1985,
@@ -478,11 +480,11 @@ RejectedLabelEmptyTarget = Rule(
 WhenRules(
   rules_any=[RejectedLabelNullTarget, RejectedLabelEmptyTarget],
   then=[
-    # Recorded against the MEDIA, since there is no event to attach it to. This is
-    # what stops ai_classification.sml re-flagging content a human just cleared:
-    # its guard reads this same entity off the video event's own hash. Written to
-    # LabelTargetEventEntity instead it would go to an empty entity and be lost,
-    # which is what happened before, and the clearance left no trace anywhere.
+    # Recorded against the MEDIA, since there is no event to attach it to. Written to
+    # LabelTargetEventEntity instead it would go to an empty entity and be lost, which
+    # is what happened before, and the clearance left no trace anywhere. Its reader
+    # (ai_classification.sml) was removed on 2026-08-16; the write stays as the record
+    # of a human decision about this media. See the note above RejectedLabelNullTarget.
     LabelAdd(entity=LabelContentHashEntity, label='human_reviewed'),
     DeclareVerdict(verdict='approve'),
   ],

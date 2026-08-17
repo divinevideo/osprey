@@ -1,3 +1,14 @@
+# UNREACHABLE from main.sml as of 2026-08-16. Its only importer was
+# content/ai_classification.sml, which was retired because moderation-service
+# already enforces its own classifications. Kept rather than deleted: it is the
+# model a corrected video rule would need, and the `MediaHash` entity type it
+# declares is deliberately shared with models/nostr/kind1985_label.sml so the
+# label path and any future video path agree on one entity.
+#
+# Unlike kind1_note.sml this file has no iac coupling, so it could be deleted on
+# its own. It stays for symmetry and because the type-sharing note above is worth
+# preserving.
+
 Import(rules=['models/base.sml'])
 
 VideoUrl: str = JsonData(

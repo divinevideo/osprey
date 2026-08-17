@@ -1,9 +1,13 @@
 # Content moderation rules for Nostr events
 #
 # label_routing: Routes kind 1985 human-verified labels to verdicts
-#                (primary path for moderation-service decisions)
-# ai_classification: Routes Hive AI results to verdicts via API lookup
-#                    (secondary path for video events without labels yet)
+#                (the path moderation-service decisions actually arrive on)
+# ai_detector_nsfw: Self-hosted NSFW model evidence, review only, no enforcement
+#
+# ai_classification was removed on 2026-08-16. It duplicated enforcement
+# moderation-service already performs on its own Hive results, and could never
+# fire on staging: DIVINE_MODERATION_API_URL is unset there and there is no
+# staging moderation-api to point it at.
 #
 # Future:
 # - Text content filtering (hate speech, harassment patterns)
@@ -13,5 +17,4 @@
 Import(rules=['models/base.sml'])
 
 Require(rule='rules/content/label_routing.sml')
-Require(rule='rules/content/ai_classification.sml')
 Require(rule='rules/content/ai_detector_nsfw.sml')

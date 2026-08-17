@@ -34,7 +34,8 @@ worth keeping current as config changes. Key couplings:
 - The report_reason chain must align across THREE places (bridge `_REASON_ALIASES`
   → an osprey rule that emits an actionable verdict → coop-setup routing). A queue with
   no rule stays empty — COOPSink only posts actionable verdicts. The canonical token
-  vocabulary + per-token ownership (osprey-rule / relay-manager / default-queue) is the
+  vocabulary + per-token ownership (osprey-rule / relay-manager; anything uncatalogued
+  passes through and is caught by the `FirstOtherReport` exclusion catch-all) is the
   single source of truth in `divine/nostr-kafka-bridge/main.py:CANONICAL_REASONS`; the
   coupling tests in `test_main.py` parse the live `.sml` rules and fail if an
   `osprey-rule` token has no rule, a rule references an uncatalogued token, or an alias
@@ -45,7 +46,7 @@ worth keeping current as config changes. Key couplings:
 
 ## Key conventions
 
-- SML rules live in `divine/rules/rules/` grouped by domain (reports, behavioral, content)
+- SML rules live in `divine/rules/rules/` grouped by domain (reports, content)
 - Labels must be registered in `divine/rules/config/labels.yaml` with correct `valid_for` entity types or the worker crashes on startup
 - `RelayManagerSink` handles enforcement (bans) and Kind 1985 label publishing
 - CI builds images on push to `divine/*` branches

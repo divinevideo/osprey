@@ -7,15 +7,19 @@
 # Safety, Harassment, CSAM, General Review). Modeled on FirstSexualReport in
 # multi_report_threshold.sml.
 #
-# The bridge emits ELEVEN canonical reasons. With nudity and violence
-# (multi_report_threshold.sml), this file covers every one an ordinary user can report
-# except `underage_user`, which is deliberately relay-manager's: it feeds the age-review
-# case system (15-day clock, age tiers, suspension), not a Coop queue.
+# The bridge catalogues ELEVEN canonical reasons, but it does not constrain the token
+# it emits: an unrecognised reason passes through unchanged. With nudity and violence
+# (multi_report_threshold.sml), this file covers every reason a user can report --
+# named or not -- except `underage_user`, which is deliberately relay-manager's: it
+# feeds the age-review case system (15-day clock, age tiers, suspension), not a Coop
+# queue. FirstOtherReport is what makes that "every": it matches by exclusion, so a
+# reason no rule names is still seen by a human. See the block above it.
 #
 # Before csam, illegal, spam, impersonation, other and ai_generated were added here, an
 # ordinary user reporting any of them reached no moderator through Osprey at all.
-# ai_generated was the subtlest: moderation_service.sml matches it, but only for a
-# service-signed report, so a USER reporting AI slop was silently dropped.
+# ai_generated was the subtlest: it was matched only by moderation_service.sml, and
+# only for a service-signed report, so a USER reporting AI slop was silently dropped.
+# That rule was removed on 2026-08-16, so this file is now the only path for it.
 #
 # WHY NOT trusted-reporter-gated: "trusted reporter" today is a hardcoded list of two
 # system identities (admin + the moderation-service), seeded manually
@@ -122,11 +126,13 @@ FirstImpersonationReport = Rule(
   description='First impersonation report on this event',
 )
 
-# ai_generated was matched ONLY by moderation_service.sml, which requires the signer to
+# ai_generated was matched ONLY by moderation_service.sml, which required the signer to
 # carry the `moderation_service` label. divine-web sends 'ai-generated' and divine-mobile
 # sends 'aiGenerated', so ordinary users do report it -- and those reports reached nobody.
-# Guarded against the moderation-service path so a service-signed report does not produce
-# two flag_for_review verdicts for the same event.
+#
+# That rule was removed on 2026-08-16 and nothing writes `moderation_service`, so the
+# signer guard below is inert today. It is retained deliberately: it costs nothing, and
+# it is the correct guard again the moment a service-signed 1984 path exists.
 FirstAiGeneratedReport = Rule(
   when_all=[
     Kind == 1984,
@@ -139,15 +145,60 @@ FirstAiGeneratedReport = Rule(
   description='First AI-generated report on this event, from an ordinary reporter',
 )
 
+# The CATCH-ALL. Matches by exclusion, so a reason no other rule names still
+# reaches a moderator instead of vanishing.
+#
+# It has to be a negation rather than a list of known reasons. A report whose
+# reason matches nothing declares no verdict, so COOPSink.will_do_work returns
+# false and nothing is submitted -- the report lands in ClickHouse and no
+# moderator ever sees it. `copyright` (divine-web, live today) and `hate`
+# (divine-mobile #7636) are in exactly that state, and every reason a client
+# adds in future would join them. Matching by exclusion makes the default
+# "a human looks at it" rather than "silently dropped".
+#
+# The list below is every reason another owner already handles, and it is
+# exact in both directions: excluding a reason nothing else owns re-opens the
+# silent drop, and failing to exclude one owned elsewhere makes two rules fire
+# on one report and produce a duplicate Coop item. Nine come from the other
+# report rules (this file, auto_hide.sml, multi_report_threshold.sml);
+# `underage_user` is relay-manager's age-review case system, not Osprey's, so
+# Osprey must not queue it. divine/rules/tests/test_report_reason_catchall.py
+# derives both halves from the live rules and the bridge's CANONICAL_REASONS
+# table and fails if this list drifts from either.
+#
+# Dedup is unchanged in shape but now wider in reach: `other_reported` is one
+# label for the whole uncategorised family, so a copyright report followed by a
+# hate report on the SAME event flags once, not twice. That matches how the
+# rule already treated two 'other' reports, and one queue item per event is the
+# intent; distinguishing them needs its own reason, rule and ClickHouse column.
+#
+# A report with NO reason also lands here. The bridge only sets report_reason
+# when it can extract one, and the engine evaluates an absent value as
+# not-in-the-list, so a 1984 about a specific event whose reason could not be
+# parsed still queues for review: a user said something about that event, and
+# the same default applies. Verified in the real engine 2026-08-17. A p-tag-only
+# report (no e-tag) does NOT reach this rule: ReportedEventId above is a
+# required EntityJson, and its missing path fails the rule before any verdict.
 FirstOtherReport = Rule(
   when_all=[
     Kind == 1984,
-    ReportReason == 'other',
+    ReportReason not in [
+      'csam',
+      'illegal',
+      'child_safety',
+      'harassment',
+      'nudity',
+      'violence',
+      'ai_generated',
+      'spam',
+      'impersonation',
+      'underage_user',
+    ],
     ReportedEvent != '',
     not HasLabel(entity=ReportedEventId, label='other_reported'),
     not HasLabel(entity=ReportedEventId, label='human_reviewed'),
   ],
-  description='First uncategorised report on this event',
+  description='First report on this event whose reason no other rule handles',
 )
 
 WhenRules(

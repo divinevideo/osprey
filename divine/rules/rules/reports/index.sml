@@ -9,5 +9,4 @@ Import(
 
 Require(rule='rules/reports/auto_hide.sml')
 Require(rule='rules/reports/multi_report_threshold.sml')
-Require(rule='rules/reports/moderation_service.sml')
 Require(rule='rules/reports/first_report_review.sml')

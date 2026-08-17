@@ -80,8 +80,8 @@ LabelContentHash: str = JsonData(
 # re-decide content a human already settled.
 #
 # Type 'MediaHash' is shared with video_event.sml so the two paths agree: the label
-# writes here and ai_classification.sml reads the same entity off the video event's
-# own hash. The id is normalised for exactly that reason, since either side may
+# writes here, and the retired ai_classification.sml read the same entity off the
+# video event's own hash. The id is normalised for exactly that reason, since either side may
 # arrive uppercased and two spellings would be two entities.
 LabelContentHashEntity: Entity[str] = Entity(
   type='MediaHash',

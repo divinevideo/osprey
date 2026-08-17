@@ -9,9 +9,11 @@
 # Creates 4 test identities and publishes events that exercise every rule:
 #   1. Trusted reporter CSAM/NSFW reports (auto_hide.sml)
 #   2. Label routing: confirmed nudity, CSAM, AI-generated, rejected (label_routing.sml)
-#   3. New account spam (new_account_spam.sml)
-#   4. Rapid posting (rapid_posting.sml) -- depends on new_account_activity label from #3
-#   5. Repeat offender (repeat_offender.sml) -- depends on warned label
+#
+# The two video-publishing scenarios below fire no rule on their own. They exist
+# to create the content that the report and label scenarios target. Publishing a
+# video is not a moderation signal: the behavioral rules that treated it as one
+# were removed on 2026-08-16 because they matched every post on the platform.
 
 set -e
 
@@ -66,7 +68,7 @@ ON CONFLICT (entity_key) DO UPDATE SET labels = EXCLUDED.labels;
 " 2>/dev/null
 echo "  Marked reporter as trusted_reporter"
 
-# Mark admin as verified (so NewAccountSpam doesn't fire on admin events)
+# Mark admin as verified (the label a future reputation signal will reuse)
 $POSTGRES_CMD -c "
 INSERT INTO entity_labels (entity_key, labels)
 VALUES (
@@ -90,9 +92,9 @@ VIDEO_HASH_2=$(sha256hash "test-video-csam-001")
 VIDEO_HASH_3=$(sha256hash "test-video-clean-001")
 VIDEO_HASH_4=$(sha256hash "test-video-ai-001")
 
-# --- 1. Verified user publishes video (should NOT trigger NewAccountSpam) ---
+# --- 1. Verified user publishes video (target for the rejected-label case) ---
 echo ""
-echo "--- Test 1: Verified user publishes video (no rules should fire) ---"
+echo "--- Test 1: Verified user publishes video (target for the rejected-label case) ---"
 $NAK event --sec "$ADMIN_NSEC" -k 34235 \
     -d "verified-video-001" \
     -t "x=$VIDEO_HASH_3" \
@@ -114,9 +116,9 @@ VERIFIED_VIDEO_ID=$($NAK event --sec "$ADMIN_NSEC" -k 34235 \
     2>/dev/null | jq -r '.id')
 echo "  Video event: ${VERIFIED_VIDEO_ID:0:16}..."
 
-# --- 2. Spammer publishes videos (should trigger NewAccountSpam) ---
+# --- 2. Second account publishes videos (report targets for tests 3 and 4) ---
 echo ""
-echo "--- Test 2: New unverified account publishes video (NewAccountSpam) ---"
+echo "--- Test 2: Second account publishes video (target for the CSAM report) ---"
 $NAK event --sec "$SPAMMER_NSEC" -k 34235 \
     -d "spam-video-001" \
     -t "x=$VIDEO_HASH_1" \
@@ -232,7 +234,7 @@ echo ""
 echo "=== Seed complete ==="
 echo ""
 echo "Published events covering:"
-echo "  - NewAccountSpam (unverified pubkey publishes video)"
+echo "  - Video baseline (two authors publish; no rules fire on publication alone)"
 echo "  - TrustedReporterCSAM (historical column; trusted reporter files illegal report)"
 echo "  - TrustedReporterNSFW (trusted reporter files NSFW report)"
 echo "  - ConfirmedNudity (human moderator label, kind 1985)"
