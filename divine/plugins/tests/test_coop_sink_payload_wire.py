@@ -220,3 +220,102 @@ def test_the_payload_is_json_serialisable(sink_module):
     value would raise at submit time rather than in any unit test."""
     captured = _drive(sink_module, {'Kind': 1984, 'CreatedAt': 1, 'EventId': WRAPPER_ID})
     json.dumps(captured['payload'])
+
+
+MEDIA_SHA = 'c' * 64
+
+
+def test_wire_payload_carries_relay_manager_url_media_link(sink_module, monkeypatch):
+    """When the moderated event's media resolves to a sha, the card links to the
+    restricted-media viewer at {DIVINE_RELAY_MANAGER_URL}/media/{sha}, and carries the
+    raw sha in media_sha256. This is the click-through a moderator uses to see auto-hidden
+    content before acting.
+    """
+    module, _ = sink_module
+    monkeypatch.setenv('DIVINE_RELAY_WS_URL', 'ws://relay.test.invalid')
+    monkeypatch.setenv('DIVINE_RELAY_MANAGER_URL', 'https://api-relay-staging.divine.video')
+    monkeypatch.setattr(
+        module,
+        'fetch_event_media_with_hash',
+        lambda *a, **k: ('https://media.test.invalid/v.mp4', 'https://media.test.invalid/t.jpg', MEDIA_SHA),
+    )
+
+    captured = _drive(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1786637235,
+            'Pubkey': AUTHOR,
+            'ReportedAuthorPubkey': AUTHOR,
+            'ReportedEventId': CONTENT_ID,
+            'EventId': WRAPPER_ID,
+        },
+    )
+    content = (
+        json.loads(captured['payload'])['content']
+        if isinstance(captured['payload'], str)
+        else captured['payload']['content']
+    )
+    assert content['media_sha256'] == MEDIA_SHA
+    assert content['relay_manager_url'] == f'https://api-relay-staging.divine.video/media/{MEDIA_SHA}'
+
+
+def test_no_relay_manager_url_when_no_sha(sink_module, monkeypatch):
+    """Fail-open: media resolves but carries no sha -> no link, item still submitted."""
+    module, _ = sink_module
+    monkeypatch.setenv('DIVINE_RELAY_WS_URL', 'ws://relay.test.invalid')
+    monkeypatch.setenv('DIVINE_RELAY_MANAGER_URL', 'https://api-relay-staging.divine.video')
+    monkeypatch.setattr(
+        module,
+        'fetch_event_media_with_hash',
+        lambda *a, **k: ('https://media.test.invalid/v.mp4', None, None),
+    )
+    captured = _drive(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1786637235,
+            'Pubkey': AUTHOR,
+            'ReportedAuthorPubkey': AUTHOR,
+            'ReportedEventId': CONTENT_ID,
+            'EventId': WRAPPER_ID,
+        },
+    )
+    content = (
+        json.loads(captured['payload'])['content']
+        if isinstance(captured['payload'], str)
+        else captured['payload']['content']
+    )
+    assert 'relay_manager_url' not in content
+    assert 'media_sha256' not in content
+
+
+def test_no_relay_manager_url_when_base_unset(sink_module, monkeypatch):
+    """If DIVINE_RELAY_MANAGER_URL is not configured, media_sha256 is still recorded but no
+    link is fabricated from a missing base."""
+    module, _ = sink_module
+    monkeypatch.setenv('DIVINE_RELAY_WS_URL', 'ws://relay.test.invalid')
+    monkeypatch.delenv('DIVINE_RELAY_MANAGER_URL', raising=False)
+    monkeypatch.setattr(
+        module,
+        'fetch_event_media_with_hash',
+        lambda *a, **k: ('https://media.test.invalid/v.mp4', None, MEDIA_SHA),
+    )
+    captured = _drive(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1786637235,
+            'Pubkey': AUTHOR,
+            'ReportedAuthorPubkey': AUTHOR,
+            'ReportedEventId': CONTENT_ID,
+            'EventId': WRAPPER_ID,
+        },
+    )
+    content = (
+        json.loads(captured['payload'])['content']
+        if isinstance(captured['payload'], str)
+        else captured['payload']['content']
+    )
+    assert content['media_sha256'] == MEDIA_SHA
+    assert 'relay_manager_url' not in content

@@ -267,3 +267,59 @@ def test_fetch_does_not_wait_for_the_peers_close_frame(monkeypatch):
     ws = _patch_ws(monkeypatch, _FakeWS([json.dumps(['EOSE', nostr_media._SUB])]))
     nostr_media.fetch_event_media('wss://relay', 'abc')
     assert ws.close_timeout == 0
+
+
+# --------------------------------------------------------------------------- #
+# media_hash_from_event / fetch_event_media_with_hash: the sha for the Coop
+# relay_manager_url media link. The moderated event carries its media hash in a
+# top-level `x` tag (blossom / NIP-94). Same fail-open contract: never raises.
+# --------------------------------------------------------------------------- #
+
+_SHA = 'b' * 64
+
+
+def test_media_hash_from_top_level_x_tag():
+    ev = {'tags': [['x', _SHA], ['imeta', 'url https://m/v.mp4']]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_lowercased_and_validated():
+    ev = {'tags': [['x', _SHA.upper()]]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA  # normalised to lowercase
+
+
+def test_media_hash_none_when_x_tag_absent_or_junk():
+    assert nostr_media.media_hash_from_event({'tags': [['imeta', 'url https://m/v.mp4']]}) is None
+    assert nostr_media.media_hash_from_event({'tags': [['x', 'not-a-hash']]}) is None
+    assert nostr_media.media_hash_from_event({'tags': 'bogus'}) is None
+    assert nostr_media.media_hash_from_event(None) is None
+
+
+def test_fetch_with_hash_returns_url_thumb_and_sha(monkeypatch):
+    _patch_ws(
+        monkeypatch,
+        _FakeWS([_event_frame([['x', _SHA], _imeta('url https://m/v.mp4', 'thumb https://m/t.jpg')])]),
+    )
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (
+        'https://m/v.mp4',
+        'https://m/t.jpg',
+        _SHA,
+    )
+
+
+def test_fetch_with_hash_sha_is_none_when_absent(monkeypatch):
+    _patch_ws(monkeypatch, _FakeWS([_event_frame([_imeta('url https://m/v.mp4')])]))
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == ('https://m/v.mp4', None, None)
+
+
+def test_fetch_with_hash_fail_open_on_not_found(monkeypatch):
+    _patch_ws(monkeypatch, _FakeWS([json.dumps(['EOSE', nostr_media._SUB])]))
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (None, None, None)
+
+
+def test_fetch_with_hash_never_raises_on_connect_failure(monkeypatch):
+    def boom(url, timeout=None):
+        raise OSError('connection refused')
+
+    monkeypatch.setattr(nostr_media, 'create_connection', boom)
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (None, None, None)

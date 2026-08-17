@@ -13,7 +13,7 @@ from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
 from reported_author import REPORT_KIND, _hex64, _kind, author_for_features, content_id_for_features
 
-from .nostr_media import fetch_event_media
+from .nostr_media import fetch_event_media_with_hash
 
 logger = get_logger(__name__)
 
@@ -70,6 +70,10 @@ class COOPSink(BaseOutputSink):
         # omitted rather than guessed. Plumbed by iac; see the account-moderation steps.
         self._user_type_id = os.environ.get('DIVINE_COOP_USER_TYPE_ID', '')
         self._media_base_url = os.environ.get('DIVINE_MEDIA_BASE_URL', 'https://media.divine.video').rstrip('/')
+        # Base for the Coop card's restricted-media link. Same host that serves
+        # /api/media-proxy and the /media/<sha> viewer page, and it is already CF Access
+        # gated. Unset -> no link is written (media_sha256 is still recorded).
+        self._relay_manager_base = os.environ.get('DIVINE_RELAY_MANAGER_URL', '').rstrip('/')
         # Reuses the variable resolve_event_author already reads, rather than adding a
         # second name for the same funnelcake API. Unset disables profile enrichment,
         # exactly as an unset DIVINE_RELAY_WS_URL disables media.
@@ -168,13 +172,19 @@ class COOPSink(BaseOutputSink):
             media_deadline = gevent.Timeout(self.media_timeout)
             try:
                 with media_deadline:
-                    media_url, media_thumbnail = fetch_event_media(
+                    media_url, media_thumbnail, media_sha256 = fetch_event_media_with_hash(
                         self._relay_ws_url, content_id, timeout=self.media_timeout
                     )
                 if media_url:
                     content['media_url'] = media_url
                 if media_thumbnail:
                     content['media_thumbnail'] = media_thumbnail
+                if media_sha256:
+                    # The raw hash, plus a link to the admin media viewer so a moderator can
+                    # see content that auto-hide has already pulled from public view.
+                    content['media_sha256'] = media_sha256
+                    if self._relay_manager_base:
+                        content['relay_manager_url'] = f'{self._relay_manager_base}/media/{media_sha256}'
             except gevent.Timeout as media_timeout_exc:
                 if media_timeout_exc is not media_deadline:
                     raise  # the sink-level timeout; MultiOutputSink owns it

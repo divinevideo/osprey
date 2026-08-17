@@ -16,6 +16,7 @@ import json
 import time
 from typing import Any
 
+from media_hash import HEX64_RE
 from websocket import create_connection  # websocket-client (synchronous)
 
 # One connection + one subscription per fetch, so a fixed subscription id is fine.
@@ -57,6 +58,27 @@ def media_from_event(event: Any) -> tuple[str | None, str | None]:
     return None, None
 
 
+def media_hash_from_event(event: object) -> str | None:
+    """Return the media sha256 from an event's top-level ``x`` tag, or ``None``.
+
+    The moderated event carries its content hash in a blossom/NIP-94 ``x`` tag. Used to
+    build the Coop card's relay_manager_url media link. Fail-open: any malformed input
+    yields ``None``. Normalised to lowercase so the link matches the proxy's key.
+    """
+    try:
+        tags = event.get('tags') if isinstance(event, dict) else None
+        if not isinstance(tags, list):
+            return None
+        for tag in tags:
+            if isinstance(tag, list) and len(tag) >= 2 and tag[0] == 'x' and isinstance(tag[1], str):
+                candidate = tag[1].strip().lower()
+                if HEX64_RE.match(candidate):
+                    return candidate
+    except Exception:
+        pass
+    return None
+
+
 def _is_http_url(value: str | None) -> bool:
     """A plain http(s) URL safe to hand to COOP (no control chars, bounded length)."""
     return (
@@ -68,20 +90,15 @@ def _is_http_url(value: str | None) -> bool:
     )
 
 
-def fetch_event_media(
-    relay_url: str, event_id: str, timeout: float = _DEFAULT_TIMEOUT
-) -> tuple[str | None, str | None]:
-    """Fetch ``event_id`` from ``relay_url`` and return its validated ``(media_url, thumb)``.
+def _fetch_raw_event(relay_url: str, event_id: str, timeout: float = _DEFAULT_TIMEOUT):
+    """Fetch a single event by id from the relay and return its dict, or ``None``.
 
-    Fail-open: returns ``(None, None)`` on empty input, connect/read failure, timeout,
-    not-found, or non-http(s) media so the caller submits the item without media. Never raises.
-
-    ``timeout`` is a wall-clock budget for the whole call, not a per-recv one: each read gets
-    only what is left of it, so a relay that keeps sending frames for other subscriptions
-    cannot hold the sink for ``_MAX_FRAMES`` × ``timeout``.
+    Holds the whole fail-open contract: empty input, connect/read failure, timeout, or
+    not-found all yield ``None``. Never raises. ``timeout`` is a wall-clock budget for the
+    entire call, shared across reads, so a chatty relay cannot hold the caller open.
     """
     if not relay_url or not event_id:
-        return None, None
+        return None
     deadline = time.monotonic() + timeout
     ws = None
     try:
@@ -90,21 +107,17 @@ def fetch_event_media(
         for _ in range(_MAX_FRAMES):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return None, None
+                return None
             ws.settimeout(remaining)
             msg = json.loads(ws.recv())
             if not isinstance(msg, list) or len(msg) < 2 or msg[1] != _SUB:
                 continue  # NOTICE / another subscription / junk frame
             if msg[0] == 'EVENT' and len(msg) >= 3:
-                url, thumb = media_from_event(msg[2])
-                return (
-                    url if _is_http_url(url) else None,
-                    thumb if _is_http_url(thumb) else None,
-                )
+                return msg[2]
             if msg[0] in ('EOSE', 'CLOSED'):
-                return None, None
+                return None
     except Exception:
-        return None, None
+        return None
     finally:
         if ws is not None:
             try:
@@ -113,4 +126,34 @@ def fetch_event_media(
                 ws.close(timeout=0)
             except Exception:
                 pass
-    return None, None
+    return None
+
+
+def fetch_event_media(
+    relay_url: str, event_id: str, timeout: float = _DEFAULT_TIMEOUT
+) -> tuple[str | None, str | None]:
+    """Fetch ``event_id`` and return its validated ``(media_url, thumb)``. Fail-open: ``(None, None)``."""
+    event = _fetch_raw_event(relay_url, event_id, timeout)
+    if event is None:
+        return None, None
+    url, thumb = media_from_event(event)
+    return (url if _is_http_url(url) else None, thumb if _is_http_url(thumb) else None)
+
+
+def fetch_event_media_with_hash(
+    relay_url: str, event_id: str, timeout: float = _DEFAULT_TIMEOUT
+) -> tuple[str | None, str | None, str | None]:
+    """Like ``fetch_event_media`` but also returns the media sha256 from the event's ``x`` tag.
+
+    One relay round-trip. Fail-open: ``(None, None, None)`` on any failure. The sha powers the
+    Coop card's relay_manager_url link to the restricted-media viewer.
+    """
+    event = _fetch_raw_event(relay_url, event_id, timeout)
+    if event is None:
+        return None, None, None
+    url, thumb = media_from_event(event)
+    return (
+        url if _is_http_url(url) else None,
+        thumb if _is_http_url(thumb) else None,
+        media_hash_from_event(event),
+    )
