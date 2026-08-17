@@ -171,6 +171,14 @@ FirstAiGeneratedReport = Rule(
 # hate report on the SAME event flags once, not twice. That matches how the
 # rule already treated two 'other' reports, and one queue item per event is the
 # intent; distinguishing them needs its own reason, rule and ClickHouse column.
+#
+# A report with NO reason also lands here. The bridge only sets report_reason
+# when it can extract one, and the engine evaluates an absent value as
+# not-in-the-list, so a 1984 about a specific event whose reason could not be
+# parsed still queues for review: a user said something about that event, and
+# the same default applies. Verified in the real engine 2026-08-17. A p-tag-only
+# report (no e-tag) does NOT reach this rule: ReportedEventId above is a
+# required EntityJson, and its missing path fails the rule before any verdict.
 FirstOtherReport = Rule(
   when_all=[
     Kind == 1984,
