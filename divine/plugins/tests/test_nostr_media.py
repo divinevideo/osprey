@@ -267,3 +267,171 @@ def test_fetch_does_not_wait_for_the_peers_close_frame(monkeypatch):
     ws = _patch_ws(monkeypatch, _FakeWS([json.dumps(['EOSE', nostr_media._SUB])]))
     nostr_media.fetch_event_media('wss://relay', 'abc')
     assert ws.close_timeout == 0
+
+
+# --------------------------------------------------------------------------- #
+# media_hash_from_event / fetch_event_media_with_hash: the sha for the Coop
+# relay_manager_url media link. Divine's publishers put the hash inside the
+# imeta tag's `x <sha>` field (see divine-mobile video_event_publisher and this
+# repo's label_routing.sml); a top-level `x` tag (blossom / NIP-94) is the
+# fallback for foreign event shapes. Same fail-open contract: never raises.
+# --------------------------------------------------------------------------- #
+
+_SHA = 'b' * 64
+_SHA_2 = 'c' * 64
+
+
+def test_media_hash_from_imeta_x_field():
+    """The real divine video-event shape: sha inside imeta, no top-level x tag."""
+    ev = {'tags': [_imeta('url https://m/v.mp4', f'x {_SHA}')]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_imeta_x_is_lowercased():
+    ev = {'tags': [_imeta('url https://m/v.mp4', f'x {_SHA.upper()}')]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_lowercased_and_validated():
+    ev = {'tags': [['x', _SHA.upper()]]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA  # normalised to lowercase
+
+
+def test_media_hash_imeta_x_wins_over_top_level_x():
+    """The imeta x names the bytes behind the card's media_url; a stray top-level
+    x about other bytes must not hijack the viewer link."""
+    ev = {'tags': [['x', _SHA_2], _imeta('url https://m/v.mp4', f'x {_SHA}')]}
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_refused_when_imeta_url_has_no_x_and_a_top_level_x_exists():
+    """Mixed shape: a url-bearing imeta without a hash plus a top-level x about
+    unknown bytes. The top-level tag is not trusted here — it could name other
+    media than the card plays, and the reported event is authored by the person
+    under moderation. No link beats a mismatched link."""
+    ev = {'tags': [['x', _SHA], _imeta('url https://m/v.mp4')]}
+    assert nostr_media.media_hash_from_event(ev) is None
+
+
+def test_media_hash_top_level_x_used_when_no_imeta_carries_a_url():
+    """NIP-94 shape: imeta tags exist but none carries a url, so the event is
+    file metadata keyed by its top-level x tag — the one case where that tag is
+    the event's own media identity."""
+    ev = {'tags': [_imeta('m video/mp4'), ['x', _SHA]]}
+    assert nostr_media.media_from_event(ev) == (None, None)
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_all_none_when_the_parse_raises_partway():
+    class Exploding:
+        def get(self, _key):
+            raise RuntimeError('boom')
+
+    assert nostr_media.media_hash_from_event(Exploding()) is None
+    assert nostr_media.media_from_event(Exploding()) == (None, None)
+
+
+def test_media_hash_from_same_imeta_as_the_url():
+    """Multiple imetas: url comes from the first with a url, and the sha must
+    come from that SAME imeta, not from any later one."""
+    ev = {
+        'tags': [
+            _imeta('m video/mp4'),  # no url: skipped
+            _imeta('url https://m/a.mp4', f'x {_SHA}'),
+            _imeta('url https://m/b.mp4', f'x {_SHA_2}'),
+        ]
+    }
+    assert nostr_media.media_from_event(ev) == ('https://m/a.mp4', None)
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_top_level_x_survives_without_any_url():
+    """No imeta with a url (NIP-94 shape): no playable url, but the viewer link
+    still matters — it is the only thing left to click once media is blocked."""
+    ev = {'tags': [['x', _SHA]]}
+    assert nostr_media.media_from_event(ev) == (None, None)
+    assert nostr_media.media_hash_from_event(ev) == _SHA
+
+
+def test_media_hash_none_when_x_tag_absent_or_junk():
+    assert nostr_media.media_hash_from_event({'tags': [_imeta('url https://m/v.mp4')]}) is None
+    assert nostr_media.media_hash_from_event({'tags': [['x', 'not-a-hash']]}) is None
+    assert nostr_media.media_hash_from_event({'tags': 'bogus'}) is None
+    assert nostr_media.media_hash_from_event(None) is None
+
+
+def test_fetch_with_hash_refuses_a_top_level_x_next_to_a_url_imeta(monkeypatch):
+    """Mixed shape at the fetch level: the url-bearing imeta has no hash, and the
+    top-level x could name other bytes than the card plays — no link is better
+    than a mismatched one."""
+    _patch_ws(
+        monkeypatch,
+        _FakeWS([_event_frame([['x', _SHA], _imeta('url https://m/v.mp4', 'thumb https://m/t.jpg')])]),
+    )
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (
+        'https://m/v.mp4',
+        'https://m/t.jpg',
+        None,
+    )
+
+
+def test_fetch_with_hash_resolves_the_sha_from_imeta_alone(monkeypatch):
+    """The real divine shape end to end: no top-level x tag anywhere, sha inside
+    imeta. Before the imeta parse existed this returned (url, thumb, None) and
+    the report/label path never got a viewer link."""
+    _patch_ws(
+        monkeypatch,
+        _FakeWS([_event_frame([_imeta('url https://m/v.mp4', 'thumb https://m/t.jpg', f'x {_SHA}')])]),
+    )
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (
+        'https://m/v.mp4',
+        'https://m/t.jpg',
+        _SHA,
+    )
+
+
+def test_fetch_with_hash_takes_the_sha_from_a_top_level_x_when_there_is_no_url(monkeypatch):
+    """Pure NIP-94 fetch: no imeta url at all, event keyed by its top-level x."""
+    _patch_ws(
+        monkeypatch,
+        _FakeWS([_event_frame([['x', _SHA]])]),
+    )
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (None, None, _SHA)
+
+
+def test_fetch_ignores_a_relay_answer_about_a_different_event(monkeypatch):
+    """Bind the answer to the request (as reported_author.extract_author does):
+    a relay answering with some other stored event must not choose what the
+    moderation card plays or links to. Fail-open to no media."""
+    wrong = json.dumps(['EVENT', nostr_media._SUB, {'id': 'other-id', 'tags': [_imeta('url https://m/wrong.mp4')]}])
+    _patch_ws(monkeypatch, _FakeWS([wrong, _event_frame([_imeta('url https://m/v.mp4', f'x {_SHA}')])]))
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (
+        'https://m/v.mp4',
+        None,
+        _SHA,
+    )
+
+
+def test_fetch_returns_none_when_the_relay_only_answers_with_a_wrong_id(monkeypatch):
+    wrong = json.dumps(['EVENT', nostr_media._SUB, {'id': 'other-id', 'tags': [_imeta('url https://m/wrong.mp4')]}])
+    _patch_ws(monkeypatch, _FakeWS([wrong, json.dumps(['EOSE', nostr_media._SUB])]))
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (None, None, None)
+    assert nostr_media.fetch_event_media('wss://relay', 'abc') == (None, None)
+
+
+def test_fetch_with_hash_sha_is_none_when_absent(monkeypatch):
+    _patch_ws(monkeypatch, _FakeWS([_event_frame([_imeta('url https://m/v.mp4')])]))
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == ('https://m/v.mp4', None, None)
+
+
+def test_fetch_with_hash_fail_open_on_not_found(monkeypatch):
+    _patch_ws(monkeypatch, _FakeWS([json.dumps(['EOSE', nostr_media._SUB])]))
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (None, None, None)
+
+
+def test_fetch_with_hash_never_raises_on_connect_failure(monkeypatch):
+    def boom(url, timeout=None):
+        raise OSError('connection refused')
+
+    monkeypatch.setattr(nostr_media, 'create_connection', boom)
+    assert nostr_media.fetch_event_media_with_hash('wss://relay', 'abc') == (None, None, None)
