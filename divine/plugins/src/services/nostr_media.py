@@ -5,9 +5,10 @@ COOP's Manual Review Tool renders a VIDEO field only when the submitted item car
 but does not carry its media, so COOPSink resolves the media by fetching the reported event
 from the relay and reading its NIP-92 ``imeta`` tag (``url <playable>`` / ``thumb <image>``).
 
-Everything here is FAIL-OPEN: any error, timeout, or missing field yields ``(None, None)`` so
-the COOP submission proceeds without media rather than being dropped or blocked. The parse
-mirrors the proven ``coop-bridge-import.sh`` reference.
+Everything here is FAIL-OPEN: any error, timeout, or missing field yields all-``None`` (a
+``(None, None)`` pair, or a ``(None, None, None)`` triple on the with-hash path) so the COOP
+submission proceeds without media rather than being dropped or blocked. The parse mirrors the
+proven ``coop-bridge-import.sh`` reference.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from websocket import create_connection  # websocket-client (synchronous)
 
 # One connection + one subscription per fetch, so a fixed subscription id is fine.
 _SUB = 'coop-media'
-# Secondary guard on the read loop. The wall-clock deadline in fetch_event_media is what
+# Secondary guard on the read loop. The wall-clock deadline in _fetch_raw_event is what
 # actually bounds it; this just caps how many frames we are willing to parse to get there.
 _MAX_FRAMES = 64
 _DEFAULT_TIMEOUT = 3.0
@@ -90,8 +91,10 @@ def _is_http_url(value: str | None) -> bool:
     )
 
 
-def _fetch_raw_event(relay_url: str, event_id: str, timeout: float = _DEFAULT_TIMEOUT):
+def _fetch_raw_event(relay_url: str, event_id: str, timeout: float = _DEFAULT_TIMEOUT) -> Any | None:
     """Fetch a single event by id from the relay and return its dict, or ``None``.
+
+    Returns the raw, unvalidated event JSON (``Any``): callers own field validation.
 
     Holds the whole fail-open contract: empty input, connect/read failure, timeout, or
     not-found all yield ``None``. Never raises. ``timeout`` is a wall-clock budget for the
@@ -136,6 +139,8 @@ def fetch_event_media(
     event = _fetch_raw_event(relay_url, event_id, timeout)
     if event is None:
         return None, None
+    # media_from_event / _is_http_url run OUTSIDE _fetch_raw_event's try/except; both self-guard
+    # against malformed input, which is what keeps this wrapper's fail-open contract intact.
     url, thumb = media_from_event(event)
     return (url if _is_http_url(url) else None, thumb if _is_http_url(thumb) else None)
 
@@ -151,6 +156,8 @@ def fetch_event_media_with_hash(
     event = _fetch_raw_event(relay_url, event_id, timeout)
     if event is None:
         return None, None, None
+    # media_from_event / _is_http_url / media_hash_from_event all run OUTSIDE the fetch's
+    # try/except; each self-guards, which is what keeps this wrapper's fail-open contract intact.
     url, thumb = media_from_event(event)
     return (
         url if _is_http_url(url) else None,

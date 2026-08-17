@@ -39,6 +39,9 @@ class COOPSink(BaseOutputSink):
         event's media so the MRT can show the video under review
         (e.g. ``wss://relay.staging.divine.video``). Optional; if unset, items are
         submitted without media (fail-open).
+      - ``DIVINE_RELAY_MANAGER_URL``: base of the relay-manager worker that serves the
+        admin media viewer (``/media/<sha>``). Optional; if unset, ``media_sha256`` is
+        still recorded but no ``relay_manager_url`` link is written (fail-open).
       - ``DIVINE_MEDIA_BASE_URL``: trusted base used to construct media URLs
         for content-hash detector Actions (default: ``https://media.divine.video``).
       - ``DIVINE_RELAY_API_URL``: funnelcake API base used for profile enrichment.
