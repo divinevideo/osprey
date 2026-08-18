@@ -81,7 +81,14 @@ def sink(monkeypatch):
         return _Response(profiles.get(pubkey, {'pubkey': pubkey, 'profile': None}))
 
     def _post(url, json=None, headers=None, timeout=None):
-        captured['payload'] = json
+        # The sink POSTs the content item and then, separately, the nostr_user item.
+        # Keyed by ENDPOINT rather than overwriting one slot, so every assertion in
+        # this file keeps reading the content submission instead of silently
+        # re-pointing at whichever call happened to land last.
+        if url.endswith('/api/v1/items/async/'):
+            captured['user_item'] = json
+        else:
+            captured['payload'] = json
         return _Response({})
 
     _stub('gevent', Timeout=_StubTimeout)

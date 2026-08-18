@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `ReportedEventId`      String DEFAULT '',
     `ReportedEvent`        String DEFAULT '',
     `ReportedPubkey`       String DEFAULT '',
+    -- Plain-string twin of ReportedPubkey (kind1984_report.sml), written on
+    -- every report that carries a p-tag. iac adds the same column before the
+    -- user_report_review rule deploys; it belongs here too or a database created
+    -- fresh from this file fails the batch the moment such a report arrives.
+    `ReportedPubkeyStr`    String DEFAULT '',
     `ReportedAuthorPubkey` String DEFAULT '',
     `ReportReason`         String DEFAULT '',
     -- Distinct-reporter dedup. These are plain extracted features rather than
@@ -88,6 +93,9 @@ CREATE TABLE IF NOT EXISTS osprey.osprey_events
     `FirstImpersonationReport` UInt8 DEFAULT 0,
     `FirstOtherReport` UInt8 DEFAULT 0,
     `FirstAiGeneratedReport` UInt8 DEFAULT 0,
+    -- Profile-only report: a `p`-tag report with no `e` tag. See
+    -- rules/reports/user_report_review.sml.
+    `FirstUserReport` UInt8 DEFAULT 0,
     -- Label routing. Each family has three target shapes (target present, null
     -- target, empty target) and EVERY rule name needs a column here.
     --
@@ -187,10 +195,12 @@ ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstSpamReport` UInt
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstImpersonationReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstOtherReport` UInt8 DEFAULT 0;
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstAiGeneratedReport` UInt8 DEFAULT 0;
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `FirstUserReport` UInt8 DEFAULT 0;
 -- Coupled to models/ai_detector_nsfw.sml and its review-only rule. Every
 -- extracted feature needs a column or ClickHouse rejects the whole batch.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReporterPubkeyStr` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `EventReporterId` String DEFAULT '';
+ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `ReportedPubkeyStr` String DEFAULT '';
 -- Hash-keyed entity for human decisions on media with no event target.
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `LabelContentHashEntity` String DEFAULT '';
 ALTER TABLE osprey.osprey_events ADD COLUMN IF NOT EXISTS `VideoHashEntity` String DEFAULT '';

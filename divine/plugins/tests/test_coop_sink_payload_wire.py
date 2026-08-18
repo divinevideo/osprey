@@ -69,12 +69,14 @@ def sink_module(monkeypatch):
     Captures whatever `requests.post` is called with, so the assertion is on the
     payload that would go over the wire.
     """
-    captured: dict = {}
+    # Every POST, in order. The sink makes more than one call now (the content
+    # submission, then the nostr_user item), so a single overwritten slot would
+    # silently re-point existing assertions at whichever call happened to be last.
+    # The helpers below select a call by ENDPOINT rather than by position.
+    captured: dict = {'calls': []}
 
     def _post(url, json=None, headers=None, timeout=None):
-        captured['url'] = url
-        captured['payload'] = json
-        captured['headers'] = headers
+        captured['calls'].append({'url': url, 'payload': json, 'headers': headers})
 
         class _Response:
             status_code = 200
@@ -153,6 +155,51 @@ def _drive(sink_module, features, action_name='nostr_kind_1984', content_id=CONT
     return captured
 
 
+def _drive_push(sink_module, features, action_name='nostr_kind_1984', verdict='flag_for_review'):
+    """Drive the REAL push(), which decides content-vs-account routing.
+
+    _drive above calls _submit_content directly; the profile-only branch lives in
+    push(), so it needs its own driver that exercises the decision, not just the
+    content assembler.
+    """
+    module, captured = sink_module
+
+    class _Action:
+        action_id = 7
+
+    _Action.action_name = action_name
+
+    class _Result:
+        action = _Action()
+        extracted_features = features
+        verdicts = [_VerdictEffect(verdict)]
+
+    module.COOPSink().push(_Result())
+    return captured
+
+
+def _call_to(captured, suffix):
+    """The single POST whose URL ends with `suffix`, or None.
+
+    Selecting by endpoint rather than by index is what keeps these assertions
+    honest as calls are added: a test asking for the content submission can never
+    silently start reading the user-item submission instead.
+    """
+    matches = [c for c in captured['calls'] if c['url'].endswith(suffix)]
+    assert len(matches) <= 1, f'expected at most one POST to {suffix}, got {len(matches)}'
+    return matches[0] if matches else None
+
+
+def _content_call(captured):
+    call = _call_to(captured, '/api/v1/content')
+    assert call is not None, 'the content submission is the primary path and must always be attempted'
+    return call
+
+
+def _user_item_call(captured):
+    return _call_to(captured, '/api/v1/items/async/')
+
+
 def test_the_wire_payload_names_the_AUTHOR_as_creator(sink_module):
     """The assertion this file exists for.
 
@@ -172,7 +219,7 @@ def test_the_wire_payload_names_the_AUTHOR_as_creator(sink_module):
             'EventId': WRAPPER_ID,
         },
     )
-    payload = captured['payload']
+    payload = _content_call(captured)['payload']
     assert payload['userId'] == AUTHOR, 'userId must carry the resolved author'
     assert payload['content']['pubkey'] == AUTHOR, 'pubkey must carry the resolved author'
     # And the reporter's own claim is still carried, clearly labelled as a claim.
@@ -189,7 +236,7 @@ def test_wire_account_identifiers_use_one_canonical_spelling(sink_module):
             'EventId': WRAPPER_ID,
         },
     )
-    payload = captured['payload']
+    payload = _content_call(captured)['payload']
     assert payload['userId'] == AUTHOR
     assert payload['content']['pubkey'] == AUTHOR
     assert payload['content']['author'] == {'id': AUTHOR, 'typeId': 'nostr-user-type'}
@@ -197,11 +244,11 @@ def test_wire_account_identifiers_use_one_canonical_spelling(sink_module):
 
 def test_the_wire_payload_has_the_expected_envelope(sink_module):
     captured = _drive(sink_module, {'Kind': 1984, 'EventId': WRAPPER_ID})
-    payload = captured['payload']
+    payload = _content_call(captured)['payload']
     assert payload['contentId'] == CONTENT_ID
     assert payload['sync'] is False
     assert set(payload) == {'contentId', 'contentType', 'userId', 'content', 'sync'}
-    assert captured['url'] == 'https://coop.test.invalid/api/v1/content'
+    assert _content_call(captured)['url'] == 'https://coop.test.invalid/api/v1/content'
 
 
 def test_userId_and_content_pubkey_describe_the_same_event(sink_module):
@@ -211,7 +258,7 @@ def test_userId_and_content_pubkey_describe_the_same_event(sink_module):
         sink_module,
         {'Kind': 1984, 'ReportedPubkey': REPORTER, 'EventId': WRAPPER_ID},
     )
-    payload = captured['payload']
+    payload = _content_call(captured)['payload']
     assert payload['userId'] == payload['content']['pubkey']
 
 
@@ -219,7 +266,7 @@ def test_the_payload_is_json_serialisable(sink_module):
     """It is handed to `requests.post(json=...)`, so a non-serialisable feature
     value would raise at submit time rather than in any unit test."""
     captured = _drive(sink_module, {'Kind': 1984, 'CreatedAt': 1, 'EventId': WRAPPER_ID})
-    json.dumps(captured['payload'])
+    json.dumps(_content_call(captured)['payload'])
 
 
 MEDIA_SHA = 'c' * 64
@@ -251,11 +298,7 @@ def test_wire_payload_carries_relay_manager_url_media_link(sink_module, monkeypa
             'EventId': WRAPPER_ID,
         },
     )
-    content = (
-        json.loads(captured['payload'])['content']
-        if isinstance(captured['payload'], str)
-        else captured['payload']['content']
-    )
+    content = _content_call(captured)['payload']['content']
     assert content['media_sha256'] == MEDIA_SHA
     assert content['relay_manager_url'] == f'https://api-relay-staging.divine.video/media/{MEDIA_SHA}'
 
@@ -281,11 +324,7 @@ def test_no_relay_manager_url_when_no_sha(sink_module, monkeypatch):
             'EventId': WRAPPER_ID,
         },
     )
-    content = (
-        json.loads(captured['payload'])['content']
-        if isinstance(captured['payload'], str)
-        else captured['payload']['content']
-    )
+    content = _content_call(captured)['payload']['content']
     assert 'relay_manager_url' not in content
     assert 'media_sha256' not in content
 
@@ -316,11 +355,7 @@ def test_detector_item_gets_the_link_from_its_hash_without_a_relay_lookup(sink_m
         action_name='ai_detector_nsfw',
         content_id=DETECTOR_SHA,
     )
-    content = (
-        json.loads(captured['payload'])['content']
-        if isinstance(captured['payload'], str)
-        else captured['payload']['content']
-    )
+    content = _content_call(captured)['payload']['content']
     assert content['media_url'] == f'https://media.test.invalid/{DETECTOR_SHA}'
     assert content['media_sha256'] == DETECTOR_SHA
     assert content['relay_manager_url'] == f'https://api-relay-staging.divine.video/media/{DETECTOR_SHA}'
@@ -348,10 +383,322 @@ def test_no_relay_manager_url_when_base_unset(sink_module, monkeypatch):
             'EventId': WRAPPER_ID,
         },
     )
-    content = (
-        json.loads(captured['payload'])['content']
-        if isinstance(captured['payload'], str)
-        else captured['payload']['content']
-    )
+    content = _content_call(captured)['payload']['content']
     assert content['media_sha256'] == MEDIA_SHA
     assert 'relay_manager_url' not in content
+
+
+# --- the nostr_user item submission ---------------------------------------------
+#
+# Coop resolves the Associated User panel by looking the account up as an ITEM
+# (`latestItemSubmissions`), not by reading the content item's `author` reference,
+# which carries only {id, typeId}. So the profile osprey already fetches reaches a
+# moderator only if the account is submitted as an item in its own right.
+
+PROFILE_BODY = {
+    'profile': {'display_name': 'Alice', 'nip05': 'alice@divine.video', 'nip05_verified': True},
+    'social': {'follower_count': 42},
+}
+
+
+def _with_profile(sink_module, monkeypatch, body=PROFILE_BODY, error=None):
+    """Enable enrichment and answer every funnelcake lookup with `body`."""
+    module, _ = sink_module
+    monkeypatch.setenv('DIVINE_RELAY_API_URL', 'https://funnelcake.test.invalid')
+    monkeypatch.setattr(module, 'fetch_profile', lambda *a, **k: (body, error))
+
+
+def _report_features():
+    return {
+        'Kind': 1984,
+        'Pubkey': REPORTER,
+        'ReportedAuthorPubkey': AUTHOR,
+        'ReportedEventId': CONTENT_ID,
+        'EventId': WRAPPER_ID,
+    }
+
+
+def test_the_user_item_submission_carries_the_profile_fields(sink_module, monkeypatch):
+    """The point of the whole change: display_name and nip05 on the account item.
+
+    Without this the panel renders 'No user information found' against a 64-char
+    hex string, and a moderator has to leave Coop to size up the account they are
+    about to ban.
+    """
+    _with_profile(sink_module, monkeypatch)
+    captured = _drive(sink_module, _report_features())
+
+    call = _user_item_call(captured)
+    assert call is not None, 'the account must be submitted as its own item'
+    data = call['payload']['items'][0]['data']
+    assert data['display_name'] == 'Alice'
+    assert data['nip05'] == 'alice@divine.video (verified)'
+    assert data['nip05_verified'] is True
+    assert data['follower_count'] == 42
+    assert data['profile_state'] == 'resolved'
+
+
+def test_the_user_item_fields_are_unprefixed(sink_module, monkeypatch):
+    """The content item namespaces three different people as author_/reported_/
+    reporter_. The user item IS one person, so the same namespacing there would
+    declare fields no producer fills and read as a second, unrelated account."""
+    _with_profile(sink_module, monkeypatch)
+    captured = _drive(sink_module, _report_features())
+
+    data = _user_item_call(captured)['payload']['items'][0]['data']
+    assert not [k for k in data if k.startswith(('author_', 'reported_', 'reporter_'))], data
+
+
+def test_the_user_item_is_keyed_by_pubkey_and_typed_as_nostr_user(sink_module, monkeypatch):
+    """`id` is what Coop resolves the panel through, so it must be the same
+    canonical pubkey the content item's `author` reference carries."""
+    _with_profile(sink_module, monkeypatch)
+    captured = _drive(sink_module, _report_features())
+
+    item = _user_item_call(captured)['payload']['items'][0]
+    assert item['id'] == AUTHOR
+    assert item['typeId'] == 'nostr-user-type'
+    # `pubkey` is declared required on nostr_user, so omitting it 400s the whole
+    # submission.
+    assert item['data']['pubkey'] == AUTHOR
+    assert item['id'] == _content_call(captured)['payload']['content']['author']['id']
+
+
+def test_the_user_item_is_submitted_with_one_canonical_spelling(sink_module, monkeypatch):
+    """An uppercase pubkey left raw would be a SECOND, distinct account item in
+    Coop for the very same person -- and the panel would resolve neither."""
+    _with_profile(sink_module, monkeypatch)
+    captured = _drive(
+        sink_module,
+        {'Kind': 1984, 'ReportedAuthorPubkey': AUTHOR.upper(), 'ReportedEventId': CONTENT_ID, 'EventId': WRAPPER_ID},
+    )
+    assert _user_item_call(captured)['payload']['items'][0]['id'] == AUTHOR
+
+
+def test_a_failing_user_item_submission_never_blocks_the_content_submission(sink_module, monkeypatch):
+    """Fail-open. Enrichment must never cost us the review item itself."""
+    module, captured = sink_module
+    _with_profile(sink_module, monkeypatch)
+
+    real_post = sys.modules['requests'].post
+
+    def _post(url, json=None, headers=None, timeout=None):
+        response = real_post(url, json=json, headers=headers, timeout=timeout)
+        if url.endswith('/api/v1/items/async/'):
+            raise RuntimeError('coop is down')
+        return response
+
+    monkeypatch.setattr(sys.modules['requests'], 'post', _post)
+
+    _drive(sink_module, _report_features())
+
+    # The content submission still happened, and _submit_content did not raise.
+    assert _content_call(captured)['payload']['contentId'] == CONTENT_ID
+
+
+def test_the_content_submission_is_attempted_before_the_user_item(sink_module, monkeypatch):
+    """Order is the fail-open guarantee: the primary path must not be able to lose
+    its share of the push budget to the enrichment POST."""
+    _with_profile(sink_module, monkeypatch)
+    captured = _drive(sink_module, _report_features())
+
+    urls = [c['url'] for c in captured['calls']]
+    assert urls.index('https://coop.test.invalid/api/v1/content') < urls.index(
+        'https://coop.test.invalid/api/v1/items/async/'
+    )
+
+
+def test_no_user_item_is_submitted_when_enrichment_is_off(sink_module, monkeypatch):
+    """Without DIVINE_RELAY_API_URL there is no profile to carry, so a second POST
+    per item would buy nothing. Production and poc are in this state today."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive(sink_module, _report_features())
+
+    assert _user_item_call(captured) is None
+    assert len(captured['calls']) == 1
+
+
+def test_no_user_item_is_submitted_without_a_resolvable_author(sink_module, monkeypatch):
+    """A junk id becomes an actionable account in Coop, exactly as it would in the
+    `author` reference. Emit or omit; never a placeholder."""
+    _with_profile(sink_module, monkeypatch)
+    captured = _drive(sink_module, {'Kind': 1984, 'EventId': WRAPPER_ID})
+
+    assert _user_item_call(captured) is None
+
+
+def test_the_user_item_payload_is_json_serialisable(sink_module, monkeypatch):
+    _with_profile(sink_module, monkeypatch)
+    captured = _drive(sink_module, _report_features())
+    json.dumps(_user_item_call(captured)['payload'])
+
+
+# --- profile-only reports: the account IS the review item -----------------------
+
+WRAPPER_1984 = '11' * 32
+
+
+def test_profile_only_report_submits_a_user_item_and_no_content(sink_module, monkeypatch):
+    """A `p`-tag-only report (no `e` tag) queues the reported ACCOUNT as a
+    nostr_user item carrying report_reason, and never submits the report event as
+    content."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1786637235,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': '',
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert _call_to(captured, '/api/v1/content') is None, 'a profile-only report has no content event to submit'
+    user = _user_item_call(captured)
+    assert user is not None, 'the reported account must be queued as a nostr_user item'
+    item = user['payload']['items'][0]
+    assert item['id'] == AUTHOR
+    assert item['typeId'] == 'nostr-user-type'
+    assert item['data']['pubkey'] == AUTHOR
+    assert item['data']['report_reason'] == 'spam'
+
+
+def test_profile_only_report_with_no_reason_still_carries_a_routing_reason(sink_module, monkeypatch):
+    """A bare `['p', <pubkey>]` tag has no reason string anywhere for the bridge
+    to extract, yet FirstUserReport fires on it (None != 'underage_user'). Coop's
+    enqueue rule only fires when report_reason is PRESENT, so omitting the field
+    would store the item and never queue it -- the silent drop this path exists
+    to prevent. The reason defaults to 'other', the same doctrine
+    first_report_review.sml's catch-all applies to a reasonless content report."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': '',
+            'EventId': WRAPPER_1984,
+            # No ReportReason at all: the shape a bare two-element p-tag produces.
+        },
+    )
+    item = _user_item_call(captured)['payload']['items'][0]
+    assert item['data']['report_reason'] == 'other'
+
+
+def test_profile_only_report_with_an_empty_reason_defaults_too(sink_module, monkeypatch):
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': '',
+            'EventId': WRAPPER_1984,
+            'ReportReason': '',
+        },
+    )
+    item = _user_item_call(captured)['payload']['items'][0]
+    assert item['data']['report_reason'] == 'other'
+
+
+def test_content_report_is_unchanged_by_the_profile_only_branch(sink_module):
+    """A report that DOES carry an event id still takes the content path."""
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedAuthorPubkey': AUTHOR,
+            'ReportedEventId': CONTENT_ID,
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert _content_call(captured) is not None
+
+
+def test_profile_only_report_without_user_type_id_is_not_queued(sink_module, monkeypatch):
+    """No nostr_user type id means no correct place to put the account, so the
+    report is dropped (loud WARNING) rather than mis-shaped as content."""
+    monkeypatch.delenv('DIVINE_COOP_USER_TYPE_ID', raising=False)
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': '',
+            # EventId present on purpose: without the profile-only branch the sink
+            # would fall back to it as a content id and POST the report event as
+            # content, so this test would pass vacuously on a None content id.
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert captured['calls'] == [], 'nothing should be POSTed when the user type id is unset'
+
+
+# --- malformed reporter-controlled tags: neither surface may be reached ----------
+#
+# The rule FirstUserReport fires on ReportedPubkeyStr != '' (ANY non-empty string) and
+# ReportedEvent == '', but the bridge does not validate the p-tag. The sink is the
+# validation boundary, and its two predicates must agree so a malformed report reaches
+# NEITHER the content card nor the account item. These pin that agreement.
+
+
+def test_report_with_a_junk_pubkey_and_no_event_submits_nothing(sink_module, monkeypatch):
+    """Adversarial reporter: a p-tag of garbage with no e-tag. The rule still fires
+    (ReportedPubkeyStr != ''), but a junk pubkey is no account and a report is never
+    its own content, so NEITHER a content card NOR an account item is submitted.
+
+    Without the fix, content_id_for_features falls back to the report's own wrapper
+    EventId and the report event is POSTed to /content as a junk card."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': 'not-a-hex-pubkey',
+            'ReportedEventId': '',
+            # Present on purpose: the wrapper id is what the old fallback would POST.
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert captured['calls'] == [], 'a junk pubkey with no event must submit nothing'
+
+
+def test_report_with_an_invalid_event_id_is_not_escalated_to_the_account(sink_module, monkeypatch):
+    """Mirror case: a CONTENT report whose e-tag is present but malformed, with a
+    valid p-tag. It must be treated as malformed content, NOT escalated onto the
+    account (nostr_user) surface, and never POSTed as a junk card whose only content
+    id is the report's own wrapper event.
+
+    Without the fix, reported_account_only treats the invalid e-tag as 'no event'
+    and returns the pubkey, escalating a content report onto the account surface."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': 'not-a-hex-event-id',
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert _call_to(captured, '/api/v1/content') is None, 'a malformed e-tag must not POST the wrapper as content'
+    assert _user_item_call(captured) is None, 'a content report must not be escalated to the account surface'
+    assert captured['calls'] == [], 'a malformed content report must submit nothing'

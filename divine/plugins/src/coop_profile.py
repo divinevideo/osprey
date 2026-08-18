@@ -24,6 +24,11 @@ RESOLVED = 'resolved'
 NO_PROFILE_OR_UPSTREAM_FAILURE = 'no_profile_or_upstream_failure'
 LOOKUP_FAILED = 'lookup_failed'
 
+# Internal only, and never seen on the wire: `user_item_fields` builds through
+# `profile_fields` and strips this back off, so the two field sets cannot drift.
+# Any non-empty string would do; a distinct one keeps the strip unambiguous.
+_STRIPPED_PREFIX = 'subject'
+
 
 def profile_fields(
     response: dict[str, Any] | None,
@@ -101,3 +106,37 @@ def profile_fields(
         out[f'{prefix}_follower_count'] = follower_count
 
     return out
+
+
+def user_item_fields(
+    response: dict[str, Any] | None,
+    *,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """The same profile fields, unprefixed, for Coop's `nostr_user` item.
+
+    WHY A SECOND SHAPE EXISTS. The content item carries THREE people -- author,
+    reported and reporter -- so each needs its own namespace or one person's
+    identity shows against another's actions. Coop's `nostr_user` item IS one
+    person, so there is nothing to disambiguate: prefixing there would declare
+    fields no producer fills, and read as an unrelated second account.
+
+    WHY IT DELEGATES rather than rebuilding the mapping. Coop declares the user
+    type's fields from the same suffix list it uses for the content type
+    (`PROFILE_SUFFIX_TYPES` in coop-setup-org.sh), so a hand-written second copy
+    of the rule here would rot independently of the first and silently drop
+    whichever field one side forgot. Deriving guarantees the key sets agree by
+    construction, and keeps the omission semantics -- an absent field means the
+    documented thing, not "unimplemented" -- identical across both.
+
+    Args:
+        response: funnelcake's `GET /api/users/{pubkey}` body, or None. Same
+            contract as `profile_fields`.
+        error: why the lookup failed, when it did.
+
+    Returns:
+        Fields to merge into the `nostr_user` item's data. The caller adds
+        `pubkey`, which Coop declares required.
+    """
+    cut = len(_STRIPPED_PREFIX) + 1
+    return {name[cut:]: value for name, value in profile_fields(response, prefix=_STRIPPED_PREFIX, error=error).items()}

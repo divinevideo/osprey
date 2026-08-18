@@ -293,10 +293,20 @@ def content_id_for_features(features: Any) -> Optional[str]:
 
     kind = _kind(features.get('Kind'))
 
+    if kind == REPORT_KIND:
+        # A report's content is the REPORTED event, hex-validated, and NEVER the
+        # report's own wrapper EventId. Falling back to the wrapper (as the shared
+        # loop below does for the other kinds) would POST the report event itself to
+        # /content as a junk card with an empty author -- reporter-reachable with a
+        # malformed or absent e-tag. An absent OR malformed reported event id
+        # therefore resolves to no content, so such a report is not submitted as
+        # content at all. This keeps the content path and reported_account_only in
+        # step: an input that is neither a truly-empty-event account report nor a
+        # valid-event content report is submitted by NEITHER path.
+        return _hex64(features.get('ReportedEventId')) or None
+
     if kind == LABEL_KIND:
         target = features.get('LabelTargetEvent')
-    elif kind == REPORT_KIND:
-        target = features.get('ReportedEventId')
     else:
         target = None
 
@@ -311,3 +321,35 @@ def content_id_for_features(features: Any) -> Optional[str]:
     if detector_hash:
         return detector_hash
     return None
+
+
+def reported_account_only(features: Any) -> Optional[str]:
+    """The reported account of a PROFILE-ONLY report, or None.
+
+    A NIP-56 report can target an ACCOUNT (a `p` tag) with NO content event (no
+    `e` tag). That is the one case where the thing to queue is the account itself,
+    not a content event. Returns the normalized reported pubkey when this is such a
+    report; None for content reports (they carry a ReportedEventId), for labels,
+    and for non-hex input.
+
+    Keyed on `Kind` for the same reason as `content_id_for_features`: presence of
+    optional features is unsound. `ReportedPubkey` is the reporter-controlled p-tag,
+    so it is hex64-validated before it can become a COOP item id -- a junk value
+    must be no account, not a fabricated one a moderator could then act on.
+    """
+    if not isinstance(features, dict):
+        return None
+    if _kind(features.get('Kind')) != REPORT_KIND:
+        return None
+    # Route to the ACCOUNT surface ONLY when the report names NO event at all.
+    # Emptiness, not hex-validity, is the discriminator: a present-but-malformed
+    # e-tag is a malformed CONTENT report, not a profile-only one, and escalating it
+    # here would let a reporter turn a junk e-tag into an account card. The content
+    # path hex-validates the event id separately, so a malformed e-tag is submitted
+    # by neither path.
+    reported_event = features.get('ReportedEventId')
+    if isinstance(reported_event, str):
+        reported_event = reported_event.strip()
+    if reported_event:
+        return None
+    return _hex64(features.get('ReportedPubkey')) or None

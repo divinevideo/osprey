@@ -134,6 +134,14 @@ labels:
     connotation: negative
     description: At least one AI-generated report received for this event from an ordinary reporter
 
+  # Account-scoped, unlike every *_reported above: a profile-only report (a
+  # p-tag with no e-tag) names an ACCOUNT, so user_report_review.sml dedups on
+  # the reported pubkey entity. There is no event to label.
+  user_reported:
+    valid_for: [ReportedPubkey]
+    connotation: negative
+    description: At least one profile-only report (no content event) received for this account
+
   threshold_met:
     valid_for: [EventId, ReportedEventId]
     connotation: negative
@@ -164,7 +172,7 @@ labels:
   # --- Human review ---
 
   human_reviewed:
-    valid_for: [EventId, ReportedEventId, Pubkey, MediaHash]
+    valid_for: [EventId, ReportedEventId, Pubkey, ReportedPubkey, MediaHash]
     connotation: neutral
     description: >-
       A human moderator has reviewed this content or account. Human decisions
@@ -172,3 +180,6 @@ labels:
       media and no event, and a decision on that shape has nowhere else to be
       recorded: written to the empty event entity it would be lost, and the
       automated rules would re-decide content a human had already cleared.
+      ReportedPubkey is the profile-only report's suppression read: once a
+      moderator has handled the account, user_report_review.sml must not re-flag
+      it.

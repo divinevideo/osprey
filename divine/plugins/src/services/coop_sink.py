@@ -5,14 +5,21 @@ import gevent
 import requests
 import sentry_sdk
 from coop_payload import build_content_fields
-from coop_profile import profile_fields
+from coop_profile import profile_fields, user_item_fields
 from funnelcake_profile import fetch_profile
 from media_hash import HEX64_RE
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.engine.language_types.verdicts import VerdictEffect
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
-from reported_author import REPORT_KIND, _hex64, _kind, author_for_features, content_id_for_features
+from reported_author import (
+    REPORT_KIND,
+    _hex64,
+    _kind,
+    author_for_features,
+    content_id_for_features,
+    reported_account_only,
+)
 
 from .nostr_media import fetch_event_media_with_hash
 
@@ -62,7 +69,13 @@ class COOPSink(BaseOutputSink):
     # the worst case scale with the number of distinct pubkeys on an item, which is
     # exactly what the derived total below cannot absorb.
     profile_timeout: float = 3.0
-    timeout: float = media_timeout + profile_timeout + coop_timeout + 1.0
+    # The nostr_user item submission is a SECOND POST, so it needs its own share of
+    # the budget rather than borrowing the content POST's. Share one and a slow Coop
+    # spends the content submission's time on the enrichment call, gevent kills the
+    # greenlet, and the review item is dropped outright (max_retries is 0) -- the
+    # exact failure the ordering in _submit_content is arranged to prevent.
+    user_item_timeout: float = 3.0
+    timeout: float = media_timeout + profile_timeout + coop_timeout + user_item_timeout + 1.0
 
     def __init__(self) -> None:
         self._url = os.environ.get('DIVINE_COOP_URL', '')
@@ -113,14 +126,6 @@ class COOPSink(BaseOutputSink):
         return any(v.verdict.lower() in ACTIONABLE_VERDICTS for v in result.verdicts)
 
     def push(self, result: ExecutionResult) -> None:
-        content_id = self._resolve_content_id(result.extracted_features)
-        if content_id is None:
-            logger.warning(
-                'COOPSink: no resolvable content ID for action_id=%s, skipping',
-                result.action.action_id,
-            )
-            return
-
         best_verdict: VerdictEffect | None = None
         for verdict in result.verdicts:
             key = verdict.verdict.lower()
@@ -130,6 +135,24 @@ class COOPSink(BaseOutputSink):
                 best_verdict.verdict.lower(), 0
             ):
                 best_verdict = verdict
+
+        # A PROFILE-ONLY report (a `p` tag, no `e` tag) has no content event: the
+        # thing to queue is the ACCOUNT, not a content id. Checked BEFORE resolving
+        # a content id, because content_id_for_features would otherwise fall back to
+        # the report's OWN event id and submit the report itself as content.
+        reported_account = reported_account_only(result.extracted_features)
+        if reported_account is not None:
+            if best_verdict is not None:
+                self._submit_reported_account(reported_account, result.extracted_features)
+            return
+
+        content_id = self._resolve_content_id(result.extracted_features)
+        if content_id is None:
+            logger.warning(
+                'COOPSink: no resolvable content ID for action_id=%s, skipping',
+                result.action.action_id,
+            )
+            return
 
         if best_verdict is not None:
             self._submit_content(content_id, best_verdict, result)
@@ -223,6 +246,11 @@ class COOPSink(BaseOutputSink):
         # But NOT silently: HTTP failures are explicit, while a 200/null profile is
         # labelled as ambiguous because funnelcake can default an upstream failure to
         # the same response as a user with no profile.
+        # Hoisted out of the enrichment block so the nostr_user submission below can
+        # reuse the author's already-fetched profile instead of looking it up twice.
+        seen: dict[str, tuple[Any, Any]] = {}
+        author_id = _hex64(author)
+
         if self._relay_api_url:
             profile_subjects = [
                 ('author', author),
@@ -231,7 +259,6 @@ class COOPSink(BaseOutputSink):
             if _kind(features.get('Kind')) == REPORT_KIND:
                 profile_subjects.append(('reporter', features.get('Pubkey', '')))
 
-            seen: dict[str, tuple[Any, Any]] = {}
             # One deadline around the WHOLE set. Per-lookup deadlines would let N
             # distinct pubkeys consume N * profile_timeout and eat the POST's share of
             # the push budget, which drops the item outright (max_retries is 0) rather
@@ -305,6 +332,145 @@ class COOPSink(BaseOutputSink):
         except Exception:
             logger.exception('Failed to submit to COOP: content=%s verdict=%s', content_id, verdict.verdict)
             sentry_sdk.capture_exception()
+
+        # AFTER the content POST, never before. This one is enrichment; that one is
+        # the review item itself, and it must not be able to lose its share of the
+        # push budget to this call.
+        if self._relay_api_url and author_id and self._user_type_id:
+            body, error = seen.get(author_id, (None, 'lookup did not complete'))
+            self._submit_user_item(author_id, body, error)
+
+    def _submit_user_item(self, pubkey: str, body: dict[str, Any] | None, error: str | None) -> None:
+        """Submit the reported account as a `nostr_user` item carrying its profile.
+
+        WHY THIS IS A SEPARATE SUBMISSION. Coop's Associated User panel does not read
+        the content item's `author` field to describe the account. It resolves the
+        account as an item in its own right -- `latestItemSubmissions(itemIdentifiers)`
+        -> `ItemInvestigationService.getItemByIdentifier` -- and renders the item
+        type's declared fields against that item's own data
+        (client/.../user/ManualReviewJobRelatedUserComponent.tsx). The `author`
+        reference is only `{id, typeId, name?}` (types/index.ts `RelatedItem`), so no
+        amount of data hung off it can populate the panel. Submitting the account as
+        an item is the mechanism Coop provides, not a workaround.
+
+        WHY `/items/async/` AND NOT `/content`. Both routes accept any item kind, but
+        only the items route writes the store the panel reads first:
+        `ItemInvestigationService.insertItem` is called from submitItems, submitReport
+        and submitAppeal, and never from submitContent. A `/content` submission is
+        reachable only through getItemByIdentifier's third fallback, the data
+        warehouse. `/items/async/` is also the generic, non-legacy submission route.
+
+        IDEMPOTENT BY DESIGN, not by luck. Coop models an item as a fixed identity
+        with mutable state and stores each submission as a new version keyed by
+        (org, typeId, itemId), rendering the most recent by submissionTime
+        (services/itemProcessingService/makeItemSubmission.ts). Re-reporting the same
+        account therefore UPDATES its card rather than duplicating it, and refreshes a
+        stale display name for free.
+
+        NO ORDERING DEPENDENCY on the Coop-side field declaration. Undeclared keys are
+        retained rather than rejected (toNormalizedItemDataOrErrors.ts: fields absent
+        from the schema "can't have errors"), so shipping this before the item type
+        declares the fields stores them silently; declaring them later starts
+        rendering them. Same semantics the content item already relies on.
+
+        Fail-open and best-effort: a failure here costs the panel's detail, never the
+        review item.
+        """
+        # Building the payload sits INSIDE the try with the POST. `fetch_profile`
+        # already guarantees a validated dict or None, so nothing here should raise --
+        # but that is a promise made in another module, and the fail-open guarantee is
+        # worth more as structure than as a cross-module contract.
+        try:
+            # `pubkey` is declared required on nostr_user, so it goes in
+            # unconditionally; the profile fields are omitted individually when unknown.
+            data: dict[str, Any] = {'pubkey': pubkey}
+            data.update(user_item_fields(body, error=error))
+            self._post_user_item(pubkey, data)
+            logger.info('Submitted nostr_user item to COOP: pubkey=%s state=%s', pubkey, data.get('profile_state'))
+        except Exception:
+            # Deliberately not a Sentry event: the content submission already
+            # succeeded, so this degrades the Associated User panel to what it shows
+            # today rather than losing anything.
+            logger.exception('Failed to submit nostr_user item to COOP: pubkey=%s', pubkey)
+
+    def _submit_reported_account(self, pubkey: str, features: dict[str, Any]) -> None:
+        """Queue a PROFILE-ONLY report as a first-class `nostr_user` review item.
+
+        This is the counterpart to `_submit_user_item`, and the difference is the
+        whole point. `_submit_user_item` is ENRICHMENT that runs after a content
+        submission already succeeded, so it swallows its failure and never raises a
+        Sentry event. This IS the review record for a report that has no content
+        event, so losing it loses the report -- a failure raises a Sentry event, the
+        same weight `_submit_content` gives the content item.
+
+        It carries `report_reason` so Coop's `nostr_user` routing sends the account
+        to the matching reason queue, and fetches the reported account's profile
+        fail-open exactly as the content enrichment path does: a lookup failure or a
+        missing `DIVINE_RELAY_API_URL` still submits `pubkey` + `report_reason`, just
+        without profile rows. The review item is never lost to an enrichment failure.
+        """
+        if not self._user_type_id:
+            # No nostr_user type id means there is no correct place to put the
+            # account. Option 2's content-shaped fallback was rejected in the design
+            # (it targets the wrong object), so the report is dropped rather than
+            # mis-shaped. Loud to us here, invisible to a moderator -- the same
+            # accepted failure mode as the `author` related item.
+            logger.warning('DIVINE_COOP_USER_TYPE_ID not set; profile-only report for %s not queued', pubkey)
+            return
+
+        body: dict[str, Any] | None = None
+        error: str | None = 'lookup did not complete'
+        if self._relay_api_url:
+            profile_deadline = gevent.Timeout(self.profile_timeout)
+            try:
+                with profile_deadline:
+                    body, error = fetch_profile(self._relay_api_url, pubkey, timeout=self.profile_timeout)
+            except gevent.Timeout as profile_timeout_exc:
+                if profile_timeout_exc is not profile_deadline:
+                    raise  # the sink-level timeout; MultiOutputSink owns it
+                body, error = None, 'profile lookup timed out'
+            except Exception as exc:  # noqa: BLE001
+                body, error = None, f'{type(exc).__name__}: {exc}'
+
+        data: dict[str, Any] = {'pubkey': pubkey}
+        # report_reason is what makes this a review job: coop's enqueue rule
+        # (coop-setup-org.sh 4b) fires only when the field is PRESENT, so an item
+        # without it is stored and never queued -- the silent drop this path
+        # exists to prevent. A bare `['p', <pubkey>]` tag carries no reason at
+        # all (the bridge extracts one only from a tag's third element, a label
+        # tag, the content JSON, or a bare keyword), and FirstUserReport fires on
+        # that shape anyway (`None != 'underage_user'`), so the reason is
+        # defaulted to 'other' here: the same doctrine first_report_review.sml's
+        # catch-all applies to a reasonless CONTENT report. An empty string
+        # defaults too. Only this path defaults -- the enrichment path below
+        # must keep sending no reason, or every content report's account card
+        # would enqueue a second job.
+        reason = features.get('ReportReason') or 'other'
+        data['report_reason'] = reason
+        data.update(user_item_fields(body, error=error))
+
+        try:
+            self._post_user_item(pubkey, data)
+            logger.info('Submitted profile-only report to COOP: pubkey=%s reason=%s', pubkey, reason)
+        except Exception:
+            logger.exception('Failed to submit profile-only report to COOP: pubkey=%s', pubkey)
+            sentry_sdk.capture_exception()
+
+    def _post_user_item(self, pubkey: str, data: dict[str, Any]) -> None:
+        """POST one `nostr_user` item to Coop's generic items route.
+
+        Shared by the enrichment path (`_submit_user_item`) and the profile-only
+        review path (`_submit_reported_account`) so the wire shape cannot drift
+        between them. Raises on a non-2xx; each caller decides how loud that is.
+        """
+        payload = {'items': [{'id': pubkey, 'typeId': self._user_type_id, 'data': data}]}
+        resp = requests.post(
+            f'{self._url}/api/v1/items/async/',
+            json=payload,
+            headers=self._headers(),
+            timeout=self.user_item_timeout,
+        )
+        resp.raise_for_status()
 
     def stop(self) -> None:
         pass
