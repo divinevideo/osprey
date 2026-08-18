@@ -152,6 +152,20 @@ def test_normalize_aliases():
         assert bridge._normalize_report_reason(f'  {raw.upper()} ') == expected, raw
 
 
+def test_profile_only_report_omits_the_reported_event_key():
+    """Producer contract for the profile-only rules: a p-tag-only report (no
+    e-tag) has NO `reported_event_id` key -- not an empty string. The bridge
+    sets it only under `if e_tags:`. Downstream, a required=False JsonData
+    feature is None on the absent path and `None == ''` is False, so
+    user_report_review.sml keys on `ReportedEvent == None` for this shape; a
+    change that starts emitting `''` instead silently breaks that rule and
+    re-opens the silent drop this pins shut."""
+    event = _event([['p', 'e' * 64, 'spam']])
+    data = bridge._wrap_nostr_event(event)['data']['data']
+    assert 'reported_event_id' not in data
+    assert data['reported_pubkey'] == 'e' * 64
+
+
 def test_mobile_subtypes_route_correctly():
     cases = [
         ('illegal', 'NS-csam', 'csam'),

@@ -615,6 +615,14 @@ def test_profile_only_report_returns_the_reported_pubkey():
     assert reported_account_only(f) == REPORTED_ACCOUNT
 
 
+def test_profile_only_report_with_the_event_key_absent_is_account_only():
+    """The shape the bridge actually produces for a p-tag-only report: it sets
+    `reported_event_id` only under `if e_tags:`, so the key is ABSENT, not ''.
+    The sink must treat the missing key exactly like the empty one."""
+    f = {'Kind': 1984, 'ReportedPubkey': REPORTED_ACCOUNT}
+    assert reported_account_only(f) == REPORTED_ACCOUNT
+
+
 def test_content_report_with_an_event_is_not_account_only():
     f = {'Kind': 1984, 'ReportedPubkey': REPORTED_ACCOUNT, 'ReportedEventId': EVENT_ID}
     assert reported_account_only(f) is None
