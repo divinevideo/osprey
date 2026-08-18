@@ -433,15 +433,20 @@ class COOPSink(BaseOutputSink):
                 body, error = None, f'{type(exc).__name__}: {exc}'
 
         data: dict[str, Any] = {'pubkey': pubkey}
-        # Truthiness, not presence: an empty reason is omitted so the card shows no
-        # blank row and the routing field is simply absent. With the conditioned
-        # enqueue rule (coop-setup-org.sh 4b fires only when report_reason is
-        # present), a reasonless nostr_user item is NOT enqueued at all rather than
-        # landing in General Review. A profile-only report always carries a reason,
-        # so this omission only affects the enrichment path, which must not be enqueued.
-        reason = features.get('ReportReason')
-        if reason:
-            data['report_reason'] = reason
+        # report_reason is what makes this a review job: coop's enqueue rule
+        # (coop-setup-org.sh 4b) fires only when the field is PRESENT, so an item
+        # without it is stored and never queued -- the silent drop this path
+        # exists to prevent. A bare `['p', <pubkey>]` tag carries no reason at
+        # all (the bridge extracts one only from a tag's third element, a label
+        # tag, the content JSON, or a bare keyword), and FirstUserReport fires on
+        # that shape anyway (`None != 'underage_user'`), so the reason is
+        # defaulted to 'other' here: the same doctrine first_report_review.sml's
+        # catch-all applies to a reasonless CONTENT report. An empty string
+        # defaults too. Only this path defaults -- the enrichment path below
+        # must keep sending no reason, or every content report's account card
+        # would enqueue a second job.
+        reason = features.get('ReportReason') or 'other'
+        data['report_reason'] = reason
         data.update(user_item_fields(body, error=error))
 
         try:

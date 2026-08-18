@@ -565,6 +565,48 @@ def test_profile_only_report_submits_a_user_item_and_no_content(sink_module, mon
     assert item['data']['report_reason'] == 'spam'
 
 
+def test_profile_only_report_with_no_reason_still_carries_a_routing_reason(sink_module, monkeypatch):
+    """A bare `['p', <pubkey>]` tag has no reason string anywhere for the bridge
+    to extract, yet FirstUserReport fires on it (None != 'underage_user'). Coop's
+    enqueue rule only fires when report_reason is PRESENT, so omitting the field
+    would store the item and never queue it -- the silent drop this path exists
+    to prevent. The reason defaults to 'other', the same doctrine
+    first_report_review.sml's catch-all applies to a reasonless content report."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': '',
+            'EventId': WRAPPER_1984,
+            # No ReportReason at all: the shape a bare two-element p-tag produces.
+        },
+    )
+    item = _user_item_call(captured)['payload']['items'][0]
+    assert item['data']['report_reason'] == 'other'
+
+
+def test_profile_only_report_with_an_empty_reason_defaults_too(sink_module, monkeypatch):
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'CreatedAt': 1,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': '',
+            'EventId': WRAPPER_1984,
+            'ReportReason': '',
+        },
+    )
+    item = _user_item_call(captured)['payload']['items'][0]
+    assert item['data']['report_reason'] == 'other'
+
+
 def test_content_report_is_unchanged_by_the_profile_only_branch(sink_module):
     """A report that DOES carry an event id still takes the content path."""
     captured = _drive_push(
