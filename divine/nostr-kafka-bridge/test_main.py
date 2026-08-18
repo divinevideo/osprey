@@ -43,6 +43,9 @@ ROUTED = {'csam', 'child_safety', 'underage_user', 'nudity', 'violence', 'harass
 # as unmatched (or as unowned) while sitting in the same bundle the catch-all fires
 # from. reports/ is the convention, not a correctness boundary.
 _RULES_DIR = Path(__file__).resolve().parent.parent / 'rules'
+_COOP_SINK = Path(__file__).resolve().parent.parent / 'plugins' / 'src' / 'services' / 'coop_sink.py'
+# The literal COOPSink defaults a reasonless profile-only report's report_reason to.
+_SINK_REASON_DEFAULT = re.compile(r"features\.get\('ReportReason'\)\s+or\s+'([^']+)'")
 
 
 def _rule_reason_tokens():
@@ -272,6 +275,30 @@ def test_rules_only_reference_canonical_tokens():
     # A rule must not match a token the bridge can never emit / does not catalogue.
     unknown = _rule_reason_tokens() - set(bridge.CANONICAL_REASONS)
     assert not unknown, f'.sml rules reference non-canonical report reasons: {unknown}'
+
+
+def test_sink_reason_default_is_a_canonical_token():
+    """The fourth place the report_reason vocabulary spans.
+
+    The bridge's CANONICAL_REASONS, the .sml rules, and coop-setup's routing are
+    held together by the coupling tests above. COOPSink also MINTS a token now:
+    a profile-only report with no reason is defaulted (coop_sink.py
+    `_submit_reported_account`, `or 'other'`), because coop's enqueue rule fires
+    only when report_reason is PRESENT -- an uncatalogued or typo'd literal here
+    would pass every other test while reasonless profile-only reports go back to
+    being stored-but-never-enqueued, the exact silent drop that defaulting fixed.
+    """
+    match = _SINK_REASON_DEFAULT.search(_COOP_SINK.read_text())
+    assert match, (
+        f'no ReportReason default found in {_COOP_SINK}. If the defaulting moved '
+        'or was removed, update or remove this coupling test deliberately.'
+    )
+    token = match.group(1)
+    assert token in bridge.CANONICAL_REASONS, (
+        f'COOPSink defaults report_reason to {token!r}, which is not in '
+        'CANONICAL_REASONS; a reasonless profile-only report would ride an '
+        'uncatalogued token'
+    )
 
 
 def test_subscription_filters_bounded_and_kind_scoped():
