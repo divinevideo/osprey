@@ -640,3 +640,35 @@ def test_missing_reported_pubkey_returns_none():
 
 def test_non_dict_features_return_none():
     assert reported_account_only(None) is None
+
+
+# --- malformed tags: content and account predicates must agree ------------------
+
+
+def test_report_with_an_invalid_event_id_resolves_no_content():
+    # A present-but-malformed e-tag must NOT fall back to the report's own wrapper
+    # EventId; that fallback POSTed the report event itself as a junk content card.
+    features = {'Kind': 1984, 'ReportedEventId': 'not-hex', 'EventId': EVENT_ID}
+    assert content_id_for_features(features) is None
+
+
+def test_report_with_no_event_resolves_no_content_not_the_wrapper():
+    features = {'Kind': 1984, 'ReportedEventId': '', 'EventId': EVENT_ID}
+    assert content_id_for_features(features) is None
+
+
+def test_report_with_a_valid_event_id_still_resolves_that_event():
+    features = {'Kind': 1984, 'ReportedEventId': EVENT_ID, 'EventId': OTHER_ID}
+    assert content_id_for_features(features) == EVENT_ID
+
+
+def test_report_with_an_invalid_event_id_is_not_account_only():
+    # Present-but-malformed e-tag is a malformed CONTENT report, not a profile-only
+    # one, so it must not be escalated to the account surface.
+    f = {'Kind': 1984, 'ReportedPubkey': REPORTED_ACCOUNT, 'ReportedEventId': 'not-hex'}
+    assert reported_account_only(f) is None
+
+
+def test_whitespace_only_event_id_is_treated_as_empty_for_account_routing():
+    f = {'Kind': 1984, 'ReportedPubkey': REPORTED_ACCOUNT, 'ReportedEventId': '   '}
+    assert reported_account_only(f) == REPORTED_ACCOUNT

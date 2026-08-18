@@ -604,3 +604,59 @@ def test_profile_only_report_without_user_type_id_is_not_queued(sink_module, mon
         },
     )
     assert captured['calls'] == [], 'nothing should be POSTed when the user type id is unset'
+
+
+# --- malformed reporter-controlled tags: neither surface may be reached ----------
+#
+# The rule FirstUserReport fires on ReportedPubkeyStr != '' (ANY non-empty string) and
+# ReportedEvent == '', but the bridge does not validate the p-tag. The sink is the
+# validation boundary, and its two predicates must agree so a malformed report reaches
+# NEITHER the content card nor the account item. These pin that agreement.
+
+
+def test_report_with_a_junk_pubkey_and_no_event_submits_nothing(sink_module, monkeypatch):
+    """Adversarial reporter: a p-tag of garbage with no e-tag. The rule still fires
+    (ReportedPubkeyStr != ''), but a junk pubkey is no account and a report is never
+    its own content, so NEITHER a content card NOR an account item is submitted.
+
+    Without the fix, content_id_for_features falls back to the report's own wrapper
+    EventId and the report event is POSTed to /content as a junk card."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': 'not-a-hex-pubkey',
+            'ReportedEventId': '',
+            # Present on purpose: the wrapper id is what the old fallback would POST.
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert captured['calls'] == [], 'a junk pubkey with no event must submit nothing'
+
+
+def test_report_with_an_invalid_event_id_is_not_escalated_to_the_account(sink_module, monkeypatch):
+    """Mirror case: a CONTENT report whose e-tag is present but malformed, with a
+    valid p-tag. It must be treated as malformed content, NOT escalated onto the
+    account (nostr_user) surface, and never POSTed as a junk card whose only content
+    id is the report's own wrapper event.
+
+    Without the fix, reported_account_only treats the invalid e-tag as 'no event'
+    and returns the pubkey, escalating a content report onto the account surface."""
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    captured = _drive_push(
+        sink_module,
+        {
+            'Kind': 1984,
+            'Pubkey': REPORTER,
+            'ReportedPubkey': AUTHOR,
+            'ReportedEventId': 'not-a-hex-event-id',
+            'EventId': WRAPPER_1984,
+            'ReportReason': 'spam',
+        },
+    )
+    assert _call_to(captured, '/api/v1/content') is None, 'a malformed e-tag must not POST the wrapper as content'
+    assert _user_item_call(captured) is None, 'a content report must not be escalated to the account surface'
+    assert captured['calls'] == [], 'a malformed content report must submit nothing'

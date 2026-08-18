@@ -293,10 +293,20 @@ def content_id_for_features(features: Any) -> Optional[str]:
 
     kind = _kind(features.get('Kind'))
 
+    if kind == REPORT_KIND:
+        # A report's content is the REPORTED event, hex-validated, and NEVER the
+        # report's own wrapper EventId. Falling back to the wrapper (as the shared
+        # loop below does for the other kinds) would POST the report event itself to
+        # /content as a junk card with an empty author -- reporter-reachable with a
+        # malformed or absent e-tag. An absent OR malformed reported event id
+        # therefore resolves to no content, so such a report is not submitted as
+        # content at all. This keeps the content path and reported_account_only in
+        # step: an input that is neither a truly-empty-event account report nor a
+        # valid-event content report is submitted by NEITHER path.
+        return _hex64(features.get('ReportedEventId')) or None
+
     if kind == LABEL_KIND:
         target = features.get('LabelTargetEvent')
-    elif kind == REPORT_KIND:
-        target = features.get('ReportedEventId')
     else:
         target = None
 
@@ -331,6 +341,15 @@ def reported_account_only(features: Any) -> Optional[str]:
         return None
     if _kind(features.get('Kind')) != REPORT_KIND:
         return None
-    if _hex64(features.get('ReportedEventId')):
+    # Route to the ACCOUNT surface ONLY when the report names NO event at all.
+    # Emptiness, not hex-validity, is the discriminator: a present-but-malformed
+    # e-tag is a malformed CONTENT report, not a profile-only one, and escalating it
+    # here would let a reporter turn a junk e-tag into an account card. The content
+    # path hex-validates the event id separately, so a malformed e-tag is submitted
+    # by neither path.
+    reported_event = features.get('ReportedEventId')
+    if isinstance(reported_event, str):
+        reported_event = reported_event.strip()
+    if reported_event:
         return None
     return _hex64(features.get('ReportedPubkey')) or None

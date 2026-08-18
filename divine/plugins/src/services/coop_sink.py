@@ -434,7 +434,11 @@ class COOPSink(BaseOutputSink):
 
         data: dict[str, Any] = {'pubkey': pubkey}
         # Truthiness, not presence: an empty reason is omitted so the card shows no
-        # blank row and the routing field is simply absent (falls to General Review).
+        # blank row and the routing field is simply absent. With the conditioned
+        # enqueue rule (coop-setup-org.sh 4b fires only when report_reason is
+        # present), a reasonless nostr_user item is NOT enqueued at all rather than
+        # landing in General Review. A profile-only report always carries a reason,
+        # so this omission only affects the enrichment path, which must not be enqueued.
         reason = features.get('ReportReason')
         if reason:
             data['report_reason'] = reason
