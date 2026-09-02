@@ -23,6 +23,10 @@ concurrency:
 jobs:
   # Build job
   build:
+    # Upstream's docs site. We fork the code, not the documentation hosting,
+    # and Pages is deliberately not enabled here - without this guard every
+    # push to main fails at actions/configure-pages.
+    if: github.repository == 'roostorg/osprey'
     runs-on: ubuntu-latest
     env:
       MDBOOK_VERSION: 0.5.2
@@ -45,6 +49,7 @@ jobs:
 
   # Deployment job
   deploy:
+    if: github.repository == 'roostorg/osprey'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
