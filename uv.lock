@@ -3,21 +3,18 @@ revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and platform_machine == 'x86_64'",
-    "python_full_version == '3.13.*' and platform_machine == 'x86_64'",
-    "python_full_version == '3.12.*' and platform_machine == 'x86_64'",
-    "python_full_version < '3.12' and platform_machine == 'x86_64'",
     "python_full_version >= '3.14' and platform_machine == 'aarch64'",
-    "python_full_version == '3.13.*' and platform_machine == 'aarch64'",
-    "python_full_version == '3.12.*' and platform_machine == 'aarch64'",
-    "python_full_version < '3.12' and platform_machine == 'aarch64'",
     "python_full_version >= '3.14' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version == '3.13.*' and platform_machine == 'x86_64'",
+    "python_full_version == '3.13.*' and platform_machine == 'aarch64'",
     "python_full_version == '3.13.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version == '3.12.*' and platform_machine == 'x86_64'",
+    "python_full_version == '3.12.*' and platform_machine == 'aarch64'",
     "python_full_version == '3.12.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version < '3.12' and platform_machine == 'x86_64'",
+    "python_full_version < '3.12' and platform_machine == 'aarch64'",
     "python_full_version < '3.12' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
-
-[options]
-exclude-newer = "2026-11-08T03:05:05Z"
 
 [manifest]
 members = [
@@ -1089,12 +1086,12 @@ version = "1.53.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and platform_machine == 'aarch64'",
-    "python_full_version == '3.13.*' and platform_machine == 'aarch64'",
-    "python_full_version == '3.12.*' and platform_machine == 'aarch64'",
-    "python_full_version < '3.12' and platform_machine == 'aarch64'",
     "python_full_version >= '3.14' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version == '3.13.*' and platform_machine == 'aarch64'",
     "python_full_version == '3.13.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version == '3.12.*' and platform_machine == 'aarch64'",
     "python_full_version == '3.12.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version < '3.12' and platform_machine == 'aarch64'",
     "python_full_version < '3.12' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/13/a8/c224a9d9ae0a9a0866ec37d9951b4407c3df3343a6c0352554e5add9152a/grpcio-1.53.2.tar.gz", hash = "sha256:0c9e42f2499c8603af1d88771dc97e2c6b0310c278337058fd7fd1ddb35ab853", size = 22422194, upload-time = "2023-08-02T16:55:27.288Z" }
