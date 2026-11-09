@@ -2,6 +2,18 @@
 # Usage: docker compose -f docker-compose.yaml -f docker-compose.test.yaml --profile test <command>
 
 services:
+  bigtable:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:592.0.0@sha256:3eb25fdc289a5b341bd428a1196690e93e652db436eb044f6bf7d6a19160c238
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "BIGTABLE_EMULATOR_HOST=localhost:8361 cbt -project=osprey-dev -instance=osprey-bigtable ls >/dev/null",
+        ]
+
+  bigtable-initializer:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:592.0.0@sha256:3eb25fdc289a5b341bd428a1196690e93e652db436eb044f6bf7d6a19160c238
+
   postgres:
     ports: !reset []
     volumes: !reset []

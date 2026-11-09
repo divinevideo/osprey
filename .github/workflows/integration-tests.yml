@@ -34,6 +34,12 @@ jobs:
       - name: Run integration tests
         run: ./run-tests.sh --junitxml=/tmp/test-results/junit-pytest.xml
 
+      - name: Capture emulator diagnostics
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yaml -f docker-compose.test.yaml --profile test ps --all
+          docker compose -f docker-compose.yaml -f docker-compose.test.yaml --profile test logs --no-color --tail=100 bigtable bigtable-initializer
+
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
