@@ -7,7 +7,19 @@ services:
     volumes: !reset []
 
   minio:
+    image: osprey-minio-test:local
+    build:
+      context: ./tests/minio
+      target: server
+    pull_policy: build
     volumes: !reset []
+
+  minio-bucket-init:
+    image: osprey-minio-client-test:local
+    build:
+      context: ./tests/minio
+      target: client
+    pull_policy: build
 
   etcd:
     container_name: etcd
