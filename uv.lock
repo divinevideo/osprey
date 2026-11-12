@@ -1,21 +1,21 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '4' and platform_machine == 'x86_64'",
-    "python_full_version >= '3.14' and python_full_version < '4' and platform_machine == 'x86_64'",
-    "python_full_version == '3.13.*' and platform_machine == 'x86_64'",
-    "python_full_version == '3.12.*' and platform_machine == 'x86_64'",
-    "python_full_version < '3.12' and platform_machine == 'x86_64'",
     "python_full_version >= '4' and platform_machine == 'aarch64'",
-    "python_full_version >= '3.14' and python_full_version < '4' and platform_machine == 'aarch64'",
-    "python_full_version == '3.13.*' and platform_machine == 'aarch64'",
-    "python_full_version == '3.12.*' and platform_machine == 'aarch64'",
-    "python_full_version < '3.12' and platform_machine == 'aarch64'",
     "python_full_version >= '4' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version >= '3.14' and python_full_version < '4' and platform_machine == 'x86_64'",
+    "python_full_version >= '3.14' and python_full_version < '4' and platform_machine == 'aarch64'",
     "python_full_version >= '3.14' and python_full_version < '4' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version == '3.13.*' and platform_machine == 'x86_64'",
+    "python_full_version == '3.13.*' and platform_machine == 'aarch64'",
     "python_full_version == '3.13.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version == '3.12.*' and platform_machine == 'x86_64'",
+    "python_full_version == '3.12.*' and platform_machine == 'aarch64'",
     "python_full_version == '3.12.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version < '3.12' and platform_machine == 'x86_64'",
+    "python_full_version < '3.12' and platform_machine == 'aarch64'",
     "python_full_version < '3.12' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 
@@ -25,6 +25,7 @@ members = [
     "osprey-rpc",
     "osprey-worker",
 ]
+default-groups = ["common", "dev"]
 overrides = [{ name = "ddtrace", specifier = ">=2.17.2,<3.0.0" }]
 
 [manifest.dependency-groups]
@@ -34,7 +35,7 @@ common = [
     { name = "blinker", specifier = "==1.9.0" },
     { name = "bytecode", specifier = "==0.16.2" },
     { name = "cachetools", specifier = "==5.5.2" },
-    { name = "certifi", specifier = "==2025.8.3" },
+    { name = "certifi", specifier = "==2026.10.23" },
     { name = "charset-normalizer", specifier = "==3.4.2" },
     { name = "click", specifier = "==7.1.2" },
     { name = "clickhouse-connect", specifier = ">=0.7.0" },
@@ -300,11 +301,11 @@ wheels = [
 
 [[package]]
 name = "certifi"
-version = "2025.8.3"
+version = "2026.10.23"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/dc/67/960ebe6bf230a96cda2e0abcf73af550ec4f090005363542f0765df162e0/certifi-2025.8.3.tar.gz", hash = "sha256:e564105f78ded564e3ae7c923924435e1daa7463faeab5bb932bc53ffae63407", size = 162386, upload-time = "2025-08-03T03:07:47.08Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fd/11/b524cbd9bbdaca58608e4cf4053fd463417549e1959fa8d3aa18319f9555/certifi-2026.10.23.tar.gz", hash = "sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd", size = 136225, upload-time = "2026-10-23T11:36:16.478Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/48/1549795ba7742c948d2ad169c1c8cdbae65bc450d6cd753d124b17c8cd32/certifi-2025.8.3-py3-none-any.whl", hash = "sha256:f6c12493cfb1b06ba2ff328595af9350c65d6644968e5d3a2ffd78699af217a5", size = 161216, upload-time = "2025-08-03T03:07:45.777Z" },
+    { url = "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl", hash = "sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1", size = 135082, upload-time = "2026-10-23T11:36:14.763Z" },
 ]
 
 [[package]]
@@ -1046,11 +1047,10 @@ resolution-markers = [
     "python_full_version < '3.12' and platform_machine == 'x86_64'",
 ]
 dependencies = [
-    { name = "six", marker = "platform_machine == 'x86_64'" },
+    { name = "six" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a3/1c/c42834d4fee45c5cf2d9546e97e879a1cbcdecfd16eb1a12144dcb91edae/grpcio-1.49.1.tar.gz", hash = "sha256:d4725fc9ec8e8822906ae26bb26f5546891aa7fbc3443de970cc556d43a5c99f", size = 22059239, upload-time = "2022-09-22T03:02:44.376Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2d/e2/aaccddb8b06637625d847dbb5fe76ec3d15a74d89d983f5202f3666706e3/grpcio-1.49.1-cp311-cp311-linux_armv7l.whl", hash = "sha256:9fb17ff8c0d56099ac6ebfa84f670c5a62228d6b5c695cf21c02160c2ac1446b", size = 73399185, upload-time = "2022-09-22T02:57:56.219Z" },
     { url = "https://files.pythonhosted.org/packages/90/0f/4d614d59f500835cbd27cb90743fb6b299098b0f22b8fd058d3586c933c0/grpcio-1.49.1-cp311-cp311-macosx_10_10_x86_64.whl", hash = "sha256:075f2d06e3db6b48a2157a1bcd52d6cbdca980dd18988fe6afdb41795d51625f", size = 4296299, upload-time = "2022-09-22T02:58:01.417Z" },
     { url = "https://files.pythonhosted.org/packages/4d/ea/359a98f8b3b4ff9a2f457a0d20ed81775a64149fbb7617177ed23d9d10c9/grpcio-1.49.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dc79b2b37d779ac42341ddef40ad5bf0966a64af412c89fc2b062e3ddabb093f", size = 4656437, upload-time = "2022-09-22T02:58:06.23Z" },
     { url = "https://files.pythonhosted.org/packages/fc/89/4952d2dff95f5b95db5943b2d1b55c82a485830b992f52f212b33616b523/grpcio-1.49.1-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:49b301740cf5bc8fed4fee4c877570189ae3951432d79fa8e524b09353659811", size = 4888051, upload-time = "2022-09-22T02:58:11.411Z" },
@@ -1063,14 +1063,14 @@ version = "1.53.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '4' and platform_machine == 'aarch64'",
-    "python_full_version >= '3.14' and python_full_version < '4' and platform_machine == 'aarch64'",
-    "python_full_version == '3.13.*' and platform_machine == 'aarch64'",
-    "python_full_version == '3.12.*' and platform_machine == 'aarch64'",
-    "python_full_version < '3.12' and platform_machine == 'aarch64'",
     "python_full_version >= '4' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version >= '3.14' and python_full_version < '4' and platform_machine == 'aarch64'",
     "python_full_version >= '3.14' and python_full_version < '4' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version == '3.13.*' and platform_machine == 'aarch64'",
     "python_full_version == '3.13.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version == '3.12.*' and platform_machine == 'aarch64'",
     "python_full_version == '3.12.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
+    "python_full_version < '3.12' and platform_machine == 'aarch64'",
     "python_full_version < '3.12' and platform_machine != 'aarch64' and platform_machine != 'x86_64'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/13/a8/c224a9d9ae0a9a0866ec37d9951b4407c3df3343a6c0352554e5add9152a/grpcio-1.53.2.tar.gz", hash = "sha256:0c9e42f2499c8603af1d88771dc97e2c6b0310c278337058fd7fd1ddb35ab853", size = 22422194, upload-time = "2023-08-02T16:55:27.288Z" }
