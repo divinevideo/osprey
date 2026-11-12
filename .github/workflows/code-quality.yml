@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
+      - name: Check image codec and hash compatibility
+        run: uv run --locked pytest tests/test_image_dependencies.py -q
+
       - name: Set PY
         run: echo "PY=$(python -VV | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
       - uses: actions/cache@v4
@@ -55,16 +58,20 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: osprey_ui/package-lock.json
 
       - name: Install UI dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
         working-directory: osprey_ui
 
       - name: Run prettier check
         run: npm run format:check
+        working-directory: osprey_ui
+
+      - name: Build UI
+        run: npm run build
         working-directory: osprey_ui
 
   rust-quality:
