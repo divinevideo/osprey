@@ -187,7 +187,11 @@ dev = [
 
 
 [tool.uv]
-override-dependencies = ["ddtrace>=2.17.2,<3.0.0"]
+override-dependencies = [
+    "ddtrace>=2.17.2,<3.0.0",
+    # virtualenv 20.39.1 caps filelock below 4; override only this dependency.
+    "filelock==4.2.1",
+]
 default-groups = ["common", "dev"]
 
 [tool.uv.sources]
