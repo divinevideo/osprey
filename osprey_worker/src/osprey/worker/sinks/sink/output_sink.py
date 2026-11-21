@@ -1,5 +1,6 @@
 import abc
 from collections import defaultdict
+from contextlib import nullcontext
 from datetime import datetime
 from typing import Any, Callable, DefaultDict, Dict, Mapping, Optional, Sequence
 
@@ -16,6 +17,7 @@ from osprey.worker.lib.instruments import metrics
 from osprey.worker.lib.osprey_shared.labels import EntityLabelMutation
 from osprey.worker.lib.osprey_shared.logging import DynamicLogSampler, get_logger
 from osprey.worker.lib.storage.labels import LabelsProvider
+from osprey.worker.sinks.output_handoff import OutputHandoff
 from tenacity import RetryCallState, retry, stop_after_attempt, wait_exponential
 
 logger = get_logger()
@@ -31,6 +33,13 @@ class BaseOutputSink(abc.ABC):
     # Retry configuration. Subclasses can override this.
     # 0 = no retries (1 attempt), 2 = up to 3 total attempts
     max_retries: int = DEFAULT_MAX_RETRIES
+
+    # A maintenance insert owns its transport deadline and immutable payload.
+    # Other sinks retain their existing timeout/retry policies.
+    manages_insert_transport: bool = False
+
+    def configure_handoff(self, handoff: OutputHandoff) -> None:
+        pass
 
     @abc.abstractmethod
     def will_do_work(self, result: ExecutionResult) -> bool:
@@ -54,6 +63,14 @@ class MultiOutputSink(BaseOutputSink):
 
     def __init__(self, sinks: Sequence[BaseOutputSink]):
         self._sinks = sinks
+        self._handoff: OutputHandoff | None = None
+
+    def configure_handoff(self, handoff: OutputHandoff) -> None:
+        if not handoff.enabled:
+            return
+        self._handoff = handoff
+        for sink in self._sinks:
+            sink.configure_handoff(handoff)
 
     def will_do_work(self, result: ExecutionResult) -> bool:
         return any(sink.will_do_work(result) for sink in self._sinks)
@@ -73,7 +90,7 @@ class MultiOutputSink(BaseOutputSink):
 
         # stop_after_attempt(1) = no retries, stop_after_attempt(3) = 2 retries
         @retry(
-            stop=stop_after_attempt(sink.max_retries + 1),
+            stop=stop_after_attempt(1 if sink.manages_insert_transport else sink.max_retries + 1),
             wait=wait_exponential(multiplier=0.5, min=0.5, max=5),
             before_sleep=log_retry_attempt,
             reraise=True,
@@ -82,7 +99,7 @@ class MultiOutputSink(BaseOutputSink):
             with (
                 trace(f'{sink_name}.push'),
                 metrics.timed('handled_message_output', tags=[f'sink:{sink_name}'], use_ms=True),
-                gevent.Timeout(sink.timeout),
+                nullcontext() if sink.manages_insert_transport else gevent.Timeout(sink.timeout),
             ):
                 sink.push(result)
 
@@ -100,10 +117,14 @@ class MultiOutputSink(BaseOutputSink):
                 except gevent.Timeout as timeout_exc:
                     logger.exception(f'Timeout exception raised when pushing event to sink: {sink_name}')
                     errors[sink] = timeout_exc
+                    if self._handoff:
+                        self._handoff.block('required_output_failed')
                     metrics.increment('output_sink.timeout', tags=[f'sink:{sink_name}'])
                     sentry_sdk.capture_exception()
                 except Exception as exc:
                     errors[sink] = exc
+                    if self._handoff:
+                        self._handoff.block('required_output_failed')
                     metrics.increment(
                         'output_sink.error', tags=[f'sink:{sink_name}', f'error:{exc.__class__.__name__}']
                     )
@@ -111,7 +132,14 @@ class MultiOutputSink(BaseOutputSink):
 
     def stop(self) -> None:
         for sink in self._sinks:
-            sink.stop()
+            if self._handoff is None:
+                sink.stop()
+                continue
+            try:
+                sink.stop()
+            except BaseException:
+                self._handoff.block('required_output_failed')
+                sentry_sdk.capture_exception()
 
         # TODO: Uncomment after making PartialSinkFailure more useful
         # if errors:
