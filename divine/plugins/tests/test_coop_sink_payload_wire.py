@@ -702,3 +702,40 @@ def test_report_with_an_invalid_event_id_is_not_escalated_to_the_account(sink_mo
     assert _call_to(captured, '/api/v1/content') is None, 'a malformed e-tag must not POST the wrapper as content'
     assert _user_item_call(captured) is None, 'a content report must not be escalated to the account surface'
     assert captured['calls'] == [], 'a malformed content report must submit nothing'
+
+
+@pytest.mark.parametrize(
+    'operation,expected_failures', [('content', 1), ('account', 1), ('account_unconfigured', 1), ('enrichment', 0)]
+)
+def test_maintenance_observes_primary_submission_failure_without_replaying(
+    sink_module, monkeypatch, operation, expected_failures
+):
+    from types import SimpleNamespace
+
+    module, captured = sink_module
+    monkeypatch.delenv('DIVINE_RELAY_API_URL', raising=False)
+    sink = module.COOPSink()
+    blocks = []
+    sink._handoff_observer = SimpleNamespace(block=blocks.append)
+    attempts = []
+
+    def fail_post(*args, **kwargs):
+        attempts.append(1)
+        raise RuntimeError('synthetic submission failure')
+
+    monkeypatch.setattr(module.requests, 'post', fail_post)
+    if operation == 'content':
+        sink._user_type_id = ''  # Isolate the primary review item from enrichment.
+        result = SimpleNamespace(
+            action=SimpleNamespace(action_id=7, action_name='synthetic'),
+            extracted_features={'Kind': 1, 'EventId': CONTENT_ID, 'Pubkey': AUTHOR},
+        )
+        sink._submit_content(CONTENT_ID, _VerdictEffect('flag_for_review'), result)
+    elif operation.startswith('account'):
+        if operation == 'account_unconfigured':
+            sink._user_type_id = ''
+        sink._submit_reported_account(AUTHOR, {'ReportReason': 'other'})
+    else:
+        sink._submit_user_item(AUTHOR, None, None)
+    assert len(attempts) == (0 if operation == 'account_unconfigured' else 1)
+    assert blocks == ['required_output_failed'] * expected_failures

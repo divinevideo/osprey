@@ -46,9 +46,11 @@ from osprey.worker.lib.utils.input_stream_ready_signaler import InputStreamReady
 from osprey.worker.sinks import (
     InputStreamSource,
 )
+from osprey.worker.sinks.handoff_supervisor import HandoffSupervisor
+from osprey.worker.sinks.output_handoff import OutputHandoff
 from osprey.worker.sinks.sink.base_sink import BaseSink, PooledSink
 from osprey.worker.sinks.sink.bulk_label_sink import BulkLabelSink
-from osprey.worker.sinks.sink.input_stream import PostgresInputStream
+from osprey.worker.sinks.sink.input_stream import KafkaInputStream, PostgresInputStream
 from osprey.worker.sinks.sink.osprey_coordinator_input_stream import OspreyCoordinatorInputStream
 from osprey.worker.sinks.sink.rules_sink import RulesSink
 from osprey.worker.sinks.utils.kafka import PatchedKafkaConsumer
@@ -132,6 +134,10 @@ def run_rules_sink(
         _bootstrap_bigtable()
 
     config = init_config()
+    handoff_enabled = config.get_bool('OSPREY_MIGRATION_HANDOFF', False)
+    start_paused = config.get_bool('OSPREY_MIGRATION_START_PAUSED', False)
+    if start_paused and not handoff_enabled:
+        raise RuntimeError('start-paused requires migration maintenance mode')
 
     engine, udf_helpers = bootstrap_engine_with_helpers()
 
@@ -143,6 +149,27 @@ def run_rules_sink(
 
     input_stream = get_rules_sink_input_stream(input_stream_source)
     output_sink = bootstrap_output_sinks(config=config)
+    handoff = None
+    if handoff_enabled:
+        if not isinstance(input_stream, KafkaInputStream) or kafka.__version__ != '1.4.7':
+            raise RuntimeError('maintenance requires the reviewed Kafka input implementation')
+        handoff = OutputHandoff(
+            enabled=True, max_pending_bytes=config.get_int('OSPREY_MIGRATION_MAX_PENDING_BYTES', 16 * 1024 * 1024)
+        )
+        output_sink.configure_handoff(handoff)
+        input_stream.configure_handoff(handoff, start_paused=start_paused)
+        supervisor = HandoffSupervisor(
+            handoff,
+            input_stream,
+            output_sink,
+            deadline_seconds=config.get_int('OSPREY_MIGRATION_DRAIN_DEADLINE_SECONDS', 120),
+        )
+        # Signal callbacks only close admission. Accepted work is joined and
+        # flushed by the held supervisor, never from a signal callback.
+        _handoff_signals = [
+            gevent.signal_handler(sig, handoff.request_drain) for sig in (signal.SIGUSR1, signal.SIGTERM, signal.SIGINT)
+        ]
+        gevent.spawn(supervisor.run)
 
     def factory() -> BaseSink:
         return RulesSink(
@@ -159,7 +186,19 @@ def run_rules_sink(
 
     gevent.spawn(gevent_liveliness_watcher)
 
-    rules_sink.run()
+    if handoff is None:
+        rules_sink.run()
+    else:
+        try:
+            rules_sink.run()
+        except BaseException:
+            handoff.block('required_output_failed')
+        else:
+            handoff.block('required_output_failed')
+        # An unexpected worker-loop exit is not a drained boundary. Keep its
+        # state and output owners alive for inspection instead of restarting.
+        while True:
+            gevent.sleep(1)
 
 
 def _run_rules_worker_process() -> None:

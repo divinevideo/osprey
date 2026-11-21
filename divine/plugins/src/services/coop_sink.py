@@ -330,6 +330,8 @@ class COOPSink(BaseOutputSink):
                 features.get('Kind'),
             )
         except Exception:
+            if (handoff := getattr(self, '_handoff_observer', None)) is not None:
+                handoff.block('required_output_failed')
             logger.exception('Failed to submit to COOP: content=%s verdict=%s', content_id, verdict.verdict)
             sentry_sdk.capture_exception()
 
@@ -415,6 +417,8 @@ class COOPSink(BaseOutputSink):
             # (it targets the wrong object), so the report is dropped rather than
             # mis-shaped. Loud to us here, invisible to a moderator -- the same
             # accepted failure mode as the `author` related item.
+            if (handoff := getattr(self, '_handoff_observer', None)) is not None:
+                handoff.block('required_output_failed')
             logger.warning('DIVINE_COOP_USER_TYPE_ID not set; profile-only report for %s not queued', pubkey)
             return
 
@@ -453,6 +457,8 @@ class COOPSink(BaseOutputSink):
             self._post_user_item(pubkey, data)
             logger.info('Submitted profile-only report to COOP: pubkey=%s reason=%s', pubkey, reason)
         except Exception:
+            if (handoff := getattr(self, '_handoff_observer', None)) is not None:
+                handoff.block('required_output_failed')
             logger.exception('Failed to submit profile-only report to COOP: pubkey=%s', pubkey)
             sentry_sdk.capture_exception()
 
