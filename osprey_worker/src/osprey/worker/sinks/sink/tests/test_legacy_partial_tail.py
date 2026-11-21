@@ -1,9 +1,11 @@
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from osprey.worker.sinks import legacy_partial_tail
 from osprey.worker.sinks.legacy_partial_tail import (
     LegacyTailPreparationError,
     RecordedEvaluation,
@@ -119,6 +121,23 @@ def test_non_object_evaluations_refuse(features: object) -> None:
 def test_malformed_evaluation_objects_and_timestamps_refuse(inputs: list[Any]) -> None:
     with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
         prepare_legacy_partial_tail(inputs, allowed_columns=COLUMNS)
+
+
+def test_deeply_nested_features_refuse_instead_of_recursing() -> None:
+    depth = 200_000
+    nested_json = '{"Object": ' + '[' * depth + ']' * depth + '}'
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail([evaluation(0, {}, extracted_features_json=nested_json)], allowed_columns=COLUMNS)
+
+
+@pytest.mark.parametrize('key', ['Object', '__verdicts'])
+def test_features_too_deep_to_reserialize_refuse(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    nested: list[Any] = []
+    for _ in range(200_000):
+        nested = [nested]
+    monkeypatch.setattr(legacy_partial_tail, 'json', SimpleNamespace(loads=lambda _: {key: nested}, dumps=json.dumps))
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail([evaluation(0, {})], allowed_columns=COLUMNS)
 
 
 def test_invalid_json_and_unknown_columns_refuse_without_exposing_content() -> None:

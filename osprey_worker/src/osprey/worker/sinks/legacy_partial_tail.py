@@ -21,6 +21,13 @@ class LegacyTailPreparationError(ValueError):
     """Refuse preparation without including private source values in errors."""
 
 
+def _dumps_feature(value: Any) -> str:
+    try:
+        return json.dumps(value)
+    except RecursionError:
+        raise LegacyTailPreparationError('invalid evaluation object') from None
+
+
 @dataclass(frozen=True, repr=False)
 class RecordedEvaluation:
     topic: str
@@ -93,7 +100,7 @@ def prepare_legacy_partial_tail(
             raise LegacyTailPreparationError('preparation capacity exceeded')
         try:
             features = json.loads(item.extracted_features_json)
-        except (TypeError, UnicodeError, ValueError):
+        except (RecursionError, TypeError, UnicodeError, ValueError):
             raise LegacyTailPreparationError('invalid evaluation object') from None
         if not isinstance(features, dict):
             raise LegacyTailPreparationError('invalid evaluation object')
@@ -103,12 +110,12 @@ def prepare_legacy_partial_tail(
         for key, value in features.items():
             if key.startswith('__'):
                 if key in _PASSTHROUGH and value is not None:
-                    row[key] = json.dumps(value) if isinstance(value, (list, dict)) else value
+                    row[key] = _dumps_feature(value) if isinstance(value, (list, dict)) else value
                 continue
             if value is None:
                 continue
             if isinstance(value, (list, dict)):
-                row[key] = json.dumps(value)
+                row[key] = _dumps_feature(value)
             elif isinstance(value, bool):
                 row[key] = int(value)
                 rule_hits[key] = value
