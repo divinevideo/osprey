@@ -111,7 +111,11 @@ class OutputHandoff:
         with self._lock:
             if not self.enabled or self._state == 'blocked':
                 return False
-            if self._state in {'running', 'paused'}:
+            if self._state == 'paused':
+                # No work was admitted. A reset-derived startup position is
+                # not an accepted boundary and must never be committed.
+                self._block('startup_cancelled')
+            elif self._state == 'running':
                 self._state = 'draining'
             return True
 
@@ -156,6 +160,7 @@ class OutputHandoff:
             'invalid_source_record',
             'transport_guard_unavailable',
             'duplicate_source_position',
+            'startup_cancelled',
         }
         if reason not in allowed:
             raise ValueError('unknown handoff failure category')

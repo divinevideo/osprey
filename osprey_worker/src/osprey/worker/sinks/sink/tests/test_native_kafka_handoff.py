@@ -165,3 +165,74 @@ def run_native_three_members(bootstrap, precommitted=False):
             producer.close(timeout=10)
         admin.delete_topics([topic])
         admin.close()
+
+
+def test_native_startup_cancellation_does_not_commit_a_reset_position():
+    bootstrap = os.environ.get('OSPREY_HANDOFF_TEST_KAFKA')
+    if not bootstrap:
+        pytest.skip('requires an explicitly configured disposable native Kafka broker')
+    assert re.fullmatch(r'127\.0\.0\.1:[0-9]{1,5}', bootstrap), 'loopback broker required'
+    result = subprocess.run(
+        [
+            sys.executable,
+            '-c',
+            'from osprey.worker.lib.patcher import patch_all; patch_all(patch_ddtrace=False); '
+            'from osprey.worker.sinks.sink.tests.test_native_kafka_handoff import run_native_cancelled_startup; '
+            'import sys; run_native_cancelled_startup(sys.argv[1])',
+            bootstrap,
+        ],
+        capture_output=True,
+        timeout=60,
+        env={**os.environ, 'DD_TRACE_ENABLED': 'false', 'DD_INSTRUMENTATION_TELEMETRY_ENABLED': 'false'},
+    )
+    assert result.returncode == 0, (result.stdout + result.stderr)[-8192:].decode(errors='replace')
+
+
+def run_native_cancelled_startup(bootstrap):
+    import signal
+
+    assert re.fullmatch(r'127\.0\.0\.1:[0-9]{1,5}', bootstrap), 'loopback broker required'
+    topic = f'synthetic-cancel-{uuid.uuid4().hex}'
+    group = f'{topic}-group'
+    partition = TopicPartition(topic, 0)
+    admin = KafkaAdminClient(bootstrap_servers=[bootstrap], request_timeout_ms=10000)
+    producer = consumer = loop = watch = handler = None
+    try:
+        admin.create_topics([NewTopic(topic, 1, 1)])
+        producer = KafkaProducer(bootstrap_servers=[bootstrap], request_timeout_ms=10000)
+        for _ in range(4):
+            producer.send(topic, value=b'synthetic-not-consumable', partition=0).get(timeout=10)
+        producer.flush(timeout=10)
+        assert admin.list_consumer_group_offsets(group, partitions=[partition])[partition].offset == -1
+        # Keep the command's default latest reset and automatic-commit policy.
+        consumer = PatchedKafkaConsumer(topic, bootstrap_servers=[bootstrap], group_id=group)
+        handoff = OutputHandoff(enabled=True)
+        stream = KafkaInputStream(consumer)
+        stream.configure_handoff(handoff, start_paused=True)
+        supervisor = HandoffSupervisor(handoff, stream, CountingOutput(), emit=lambda _: None)
+        handler = gevent.signal_handler(signal.SIGTERM, handoff.request_drain)
+        loop, watch = gevent.spawn(next, stream), gevent.spawn(supervisor.run)
+        wait_for(lambda: stream.handoff_startup_status()['ready'])
+        assert stream.handoff_startup_status()['positions'][0]['next_offset'] == 4
+        os.kill(os.getpid(), signal.SIGTERM)
+        wait_for(lambda: handoff.snapshot()['state'] == 'blocked')
+        gevent.sleep(0.5)
+        assert handoff.snapshot()['blocked_reasons'] == ['startup_cancelled']
+        assert handoff.snapshot()['accepted'] == 0
+        assert not handoff.snapshot()['local_drained']
+        assert not stream.request_handoff_commit()
+        assert not stream.request_handoff_activation()
+        assert not loop.ready()
+        assert admin.list_consumer_group_offsets(group, partitions=[partition])[partition].offset == -1
+    finally:
+        if handler is not None:
+            handler.cancel()
+        for task in (watch, loop):
+            if task is not None:
+                task.kill()
+        if consumer is not None:
+            consumer.close(autocommit=False)
+        if producer is not None:
+            producer.close(timeout=10)
+        admin.delete_topics([topic])
+        admin.close()

@@ -278,3 +278,27 @@ def test_cached_startup_readiness_expires_when_membership_polling_stalls():
         assert not stream.request_handoff_activation()
     finally:
         waiting.kill()
+
+
+def test_cancelling_never_activated_startup_cannot_create_a_drain_certificate_or_offset():
+    handoff, consumer, stream = startup()
+    commits = []
+    consumer.commit_async = lambda **kwargs: commits.append(kwargs)
+    waiting = gevent.spawn(next, stream)
+    supervisor = HandoffSupervisor(handoff, stream, SimpleNamespace(stop=lambda: None), emit=lambda _: None)
+    try:
+        gevent.sleep(0.02)
+        assert handoff.request_drain()
+        for _ in range(3):
+            supervisor.tick()
+            gevent.sleep(0.01)
+        assert handoff.snapshot()['state'] == 'blocked'
+        assert 'startup_cancelled' in handoff.snapshot()['blocked_reasons']
+        assert not handoff.snapshot()['local_drained']
+        assert handoff.snapshot()['accepted'] == 0
+        assert not stream.request_handoff_commit()
+        assert not handoff.certify(committed=True)
+        assert not stream.request_handoff_activation()
+        assert not commits
+    finally:
+        waiting.kill()

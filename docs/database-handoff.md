@@ -71,6 +71,9 @@ epoch before opening admission. A group change after the request blocks it.
 Activation never resumes a running, drained or blocked worker. A drain request
 also permanently ends startup eligibility. Inspect the resulting state and real
 publishing; a successfully delivered signal is not proof of activation.
+Cancellation of a never-activated startup reports `startup_cancelled` and stays
+blocked. It does not commit a reset-derived position or certify a drained
+boundary. This includes termination signals during a rollout cancellation.
 Receipt positions are cached by the poll owner and expire for readiness when
 membership polling is stale. Receipt generation never waits for Kafka I/O, and
 final-commit lock acquisition is bounded so coordinator outages cannot suspend
@@ -117,3 +120,6 @@ The native cases use a separate admin OffsetFetch, check both absent and seeded
 offsets through rebalances and a full automatic-commit interval, and verify
 exact broker coverage after draining. The owning consumer's commit cache is
 not independent broker evidence.
+An additional native case sends a real termination signal before activation and
+verifies that a previously absent broker offset stays absent despite the local
+latest-reset position pointing past queued records.
