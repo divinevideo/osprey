@@ -104,6 +104,7 @@ def pooled_child() -> None:
         execute=lambda helpers, action, **kwargs: SimpleNamespace(
             action=action,
             extracted_features_json=json.dumps({'SyntheticRule': True}),
+            error_infos=[],
         ),
     )
     config = SimpleNamespace(

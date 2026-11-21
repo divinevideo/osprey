@@ -120,7 +120,10 @@ class RulesRunner:
                 self._output_sink.push(result)
                 info_log_osprey_action(action.action_id, action.action_name, 'pushed to output sink')
                 if report_disposition:
-                    report_disposition('completed')
+                    # The executor preserves partial results and separately
+                    # reports unexpected node errors. Output delivery alone
+                    # cannot certify that the classification succeeded.
+                    report_disposition('failed' if result.error_infos else 'completed')
                 return result
         except BaseException:
             if report_disposition:
