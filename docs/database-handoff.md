@@ -14,7 +14,16 @@ these with `OSPREY_MIGRATION_MAX_PENDING_BYTES` and
 `OSPREY_MIGRATION_DRAIN_DEADLINE_SECONDS`. The deadline is an observation bound,
 not a measured maintenance or rollback budget.
 Maintenance requires an explicitly configured `OSPREY_KAFKA_GROUP_ID`; consumers
-without a named group are rejected before polling.
+without a named group are rejected before polling. Maintenance also requires
+`auto_offset_reset='none'`; the command selects it only when maintenance is
+enabled, and the stream checks both constructor configuration and the pinned
+subscription's effective policy before intake. Updating the mutable consumer
+config after construction is insufficient.
+Missing broker offsets block startup. An out-of-range offset blocks delivery
+rather than silently skipping forward or replaying from the beginning. Verify
+that the recorded boundary is retained before activation: a cached startup
+position alone does not establish that. Repair requires the separately reviewed
+source reconciliation, not resetting offsets merely to make startup pass.
 
 Send `SIGUSR1` to request a planned drain. In maintenance mode `SIGTERM` and
 `SIGINT` request the same cooperative work. The signal callback only sets the
@@ -124,10 +133,12 @@ same early gevent patch as the worker command. The test is skipped when the
 broker variable is absent and rejects non-loopback addresses. This proves the
 intake/offset path; it does not exercise moderation, ClickHouse, recovery,
 production load, or the global handoff barrier.
-The native cases use a separate admin OffsetFetch, check both absent and seeded
-offsets through rebalances and a full automatic-commit interval, and verify
-exact broker coverage after draining. The owning consumer's commit cache is
-not independent broker evidence.
-An additional native case sends a real termination signal before activation and
-verifies that a previously absent broker offset stays absent despite the local
-latest-reset position pointing past queued records.
+The native cases use a separate admin OffsetFetch and seed valid boundaries at
+zero and mid-stream through rebalances and a full automatic-commit interval.
+They verify exact broker coverage after draining; the owning consumer's cache
+is not independent broker evidence. Another case cancels a never-activated
+startup with a real termination signal and verifies its existing commit stays
+unchanged. Command-constructor regressions also exercise absent and out-of-range
+broker offsets, requiring zero accepted records, a held blocked process and no
+reset-derived broker commit. These fault tests do not authorize activation
+without independently validating the boundary.

@@ -67,9 +67,10 @@ def pooled_child() -> None:
 
     consumer = Consumer(record())
     consumer._subscription = SimpleNamespace(
+        has_default_offset_reset_policy=lambda: False,
         all_consumed_offsets=lambda: {
             TopicPartition('actions', 0): OffsetAndMetadata(43, ''),
-        }
+        },
     )
     commits = []
 

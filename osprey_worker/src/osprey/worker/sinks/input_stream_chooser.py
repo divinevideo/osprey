@@ -119,6 +119,7 @@ def get_rules_sink_input_stream(
             client_id=client_id,
             group_id=group_id,
             partition_assignment_strategy=(RoundRobinPartitionAssignor,),
+            auto_offset_reset='none' if config.get_bool('OSPREY_MIGRATION_HANDOFF', False) else 'latest',
         )
         from osprey.worker.sinks.sink.input_stream import KafkaInputStream
 
