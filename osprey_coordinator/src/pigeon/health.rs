@@ -163,7 +163,10 @@ impl Health for HealthServer {
             }
         };
 
-        Ok(Response::new(Box::pin(output) as Self::WatchStream))
+        // Coerce through a typed binding, not `as`: cast checks run after never-type fallback,
+        // so the diverging `loop` above would infer the stream's future as `Output = !`.
+        let output: Self::WatchStream = Box::pin(output);
+        Ok(Response::new(output))
     }
 }
 
