@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import gevent
+import pytest
 from kafka import OffsetAndMetadata, TopicPartition
 from osprey.worker.sinks.handoff_supervisor import HandoffSupervisor
 from osprey.worker.sinks.output_handoff import OutputHandoff
@@ -167,5 +168,113 @@ def test_startup_receipt_reports_ready_positions_separately_from_commit_ack():
         assert receipt['positions'] == [{'topic': 'actions', 'partition': 0, 'next_offset': 42}]
         assert receipt['membership_epoch'] == stream._membership_epoch
         assert not stream.handoff_offsets()
+    finally:
+        waiting.kill()
+
+
+def test_pristine_pause_disables_automatic_commits_until_explicit_activation():
+    handoff, consumer, stream = startup()
+    assert consumer._coordinator.config['enable_auto_commit'] is False
+    waiting = gevent.spawn(next, stream)
+    try:
+        gevent.sleep(0.02)
+        assert stream.request_handoff_activation()
+        context = waiting.get(timeout=1)
+        with context:
+            context.set_disposition('completed')
+        assert consumer._coordinator.config['enable_auto_commit'] is True
+    finally:
+        waiting.kill()
+
+
+def test_groupless_maintenance_is_rejected_before_any_poll():
+    import pytest
+
+    consumer = Consumer(record())
+    consumer.config = {'group_id': None}
+    stream = KafkaInputStream(consumer)
+    with pytest.raises(ValueError, match='named Kafka group'):
+        stream.configure_handoff(OutputHandoff(enabled=True), start_paused=True)
+    assert consumer.polls == 0
+
+
+@pytest.mark.parametrize('initially_running', [False, True])
+def test_stalled_poll_cannot_block_supervisor_receipts_or_drain_deadline(initially_running):
+    import time
+
+    from gevent.event import Event
+
+    handoff, consumer, stream = startup()
+    release = Event()
+    locked = Event()
+    clock = [0.0]
+    receipts = []
+
+    # A coordinator discovery loop can hold this lock beyond poll(timeout_ms).
+    def stuck_poll():
+        with stream._consumer_lock:
+            locked.set()
+            release.wait()
+
+    locker = gevent.spawn(stuck_poll)
+    locked.wait(timeout=1)
+    if initially_running:
+        handoff.activate_before_intake()
+    stream._held = True
+    stream._last_membership_poll = time.monotonic()
+    supervisor = HandoffSupervisor(
+        handoff,
+        stream,
+        SimpleNamespace(stop=lambda: None),
+        deadline_seconds=1,
+        clock=lambda: clock[0],
+        emit=receipts.append,
+    )
+    watcher = gevent.spawn(supervisor.run)
+    try:
+        gevent.sleep(0.05)
+        handoff.request_drain()
+        gevent.sleep(0.15)
+        clock[0] = 2
+        gevent.sleep(0.25)
+        assert handoff.snapshot()['state'] == 'blocked'
+        assert 'drain_deadline' in handoff.snapshot()['blocked_reasons']
+        assert receipts
+        assert not locker.ready()
+    finally:
+        watcher.kill()
+        release.set()
+        locker.join(timeout=1)
+
+
+def test_activation_preserves_explicitly_disabled_automatic_commit_policy():
+    handoff = OutputHandoff(enabled=True)
+    consumer = Consumer(record())
+    consumer._coordinator.config['enable_auto_commit'] = False
+    stream = KafkaInputStream(consumer)
+    stream.configure_handoff(handoff, start_paused=True)
+    waiting = gevent.spawn(next, stream)
+    try:
+        gevent.sleep(0.02)
+        assert stream.request_handoff_activation()
+        context = waiting.get(timeout=1)
+        with context:
+            context.set_disposition('completed')
+        assert consumer._coordinator.config['enable_auto_commit'] is False
+    finally:
+        waiting.kill()
+
+
+def test_cached_startup_readiness_expires_when_membership_polling_stalls():
+    import time
+
+    handoff, consumer, stream = startup()
+    waiting = gevent.spawn(next, stream)
+    try:
+        gevent.sleep(0.02)
+        assert stream.handoff_startup_status()['ready']
+        stream._last_membership_poll = time.monotonic() - 3
+        assert not stream.handoff_startup_status()['ready']
+        assert not stream.request_handoff_activation()
     finally:
         waiting.kill()

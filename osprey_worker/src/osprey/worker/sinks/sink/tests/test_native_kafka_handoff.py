@@ -10,7 +10,7 @@ import uuid
 
 import gevent
 import pytest
-from kafka import KafkaProducer
+from kafka import KafkaProducer, OffsetAndMetadata, TopicPartition
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
 from osprey.worker.sinks.handoff_supervisor import HandoffSupervisor
@@ -34,7 +34,8 @@ class CountingOutput:
         self.stops += 1
 
 
-def test_three_native_members_start_paused_activate_and_commit_exact_drained_boundaries():
+@pytest.mark.parametrize('precommitted', [False, True])
+def test_three_native_members_start_paused_activate_and_commit_exact_drained_boundaries(precommitted):
     bootstrap = os.environ.get('OSPREY_HANDOFF_TEST_KAFKA')
     if not bootstrap:
         pytest.skip('requires an explicitly configured disposable native Kafka broker')
@@ -45,8 +46,9 @@ def test_three_native_members_start_paused_activate_and_commit_exact_drained_bou
             '-c',
             'from osprey.worker.lib.patcher import patch_all; patch_all(patch_ddtrace=False); '
             'from osprey.worker.sinks.sink.tests.test_native_kafka_handoff import run_native_three_members; '
-            'import sys; run_native_three_members(sys.argv[1])',
+            'import sys; run_native_three_members(sys.argv[1], sys.argv[2] == "True")',
             bootstrap,
+            str(precommitted),
         ],
         capture_output=True,
         timeout=120,
@@ -55,7 +57,7 @@ def test_three_native_members_start_paused_activate_and_commit_exact_drained_bou
     assert result.returncode == 0, (result.stdout + result.stderr)[-8192:].decode(errors='replace')
 
 
-def run_native_three_members(bootstrap):
+def run_native_three_members(bootstrap, precommitted=False):
     assert re.fullmatch(r'127\.0\.0\.1:[0-9]{1,5}', bootstrap), 'loopback broker required'
     topic = f'synthetic-handoff-{uuid.uuid4().hex}'
     admin = KafkaAdminClient(bootstrap_servers=[bootstrap], request_timeout_ms=10000)
@@ -63,6 +65,8 @@ def run_native_three_members(bootstrap):
     workers = []
     try:
         admin.create_topics([NewTopic(topic, 3, 1)])
+        partitions = [TopicPartition(topic, partition) for partition in range(3)]
+        group = f'{topic}-group'
         producer = KafkaProducer(bootstrap_servers=[bootstrap], request_timeout_ms=10000)
         for partition in range(3):
             for offset in range(5):
@@ -74,6 +78,24 @@ def run_native_three_members(bootstrap):
                 ).encode()
                 producer.send(topic, partition=partition, value=value).get(timeout=10)
         producer.flush(timeout=10)
+        if precommitted:
+            seed = PatchedKafkaConsumer(bootstrap_servers=[bootstrap], group_id=group, enable_auto_commit=False)
+            try:
+                seed.assign(partitions)
+                seed.commit({partition: OffsetAndMetadata(2, '') for partition in partitions})
+            finally:
+                seed.close(autocommit=False)
+        expected_start = 2 if precommitted else -1
+        baseline = admin.list_consumer_group_offsets(group, partitions=partitions)
+        assert set(baseline) == set(partitions)
+        assert all(value.offset == expected_start for value in baseline.values())
+
+        groupless = PatchedKafkaConsumer(topic, bootstrap_servers=[bootstrap])
+        try:
+            with pytest.raises(ValueError, match='named Kafka group'):
+                KafkaInputStream(groupless).configure_handoff(OutputHandoff(enabled=True), start_paused=True)
+        finally:
+            groupless.close(autocommit=False)
 
         def consume(stream):
             for context in stream:
@@ -85,7 +107,7 @@ def run_native_three_members(bootstrap):
             consumer = PatchedKafkaConsumer(
                 topic,
                 bootstrap_servers=[bootstrap],
-                group_id=f'{topic}-group',
+                group_id=group,
                 client_id=f'synthetic-{index}',
                 partition_assignment_strategy=(RoundRobinPartitionAssignor,),
                 auto_offset_reset='earliest',
@@ -103,6 +125,12 @@ def run_native_three_members(bootstrap):
             wait_for(lambda: bool(consumer.assignment()))
         wait_for(lambda: all(len(worker[0].assignment()) == 1 for worker in workers))
         wait_for(lambda: all(worker[2].handoff_startup_status()['ready'] for worker in workers))
+        # Cover both rejoin-time commits above and a complete default five-second
+        # auto-commit interval. No explicit commit or activation has occurred.
+        gevent.sleep(5.5)
+        still_paused = admin.list_consumer_group_offsets(group, partitions=partitions)
+        assert set(still_paused) == set(partitions)
+        assert all(value.offset == expected_start for value in still_paused.values())
         for consumer, handoff, stream, output, loop, _ in workers:
             assert consumer.assignment() <= consumer.paused()
             assert handoff.snapshot()['state'] == 'paused'
@@ -111,21 +139,23 @@ def run_native_three_members(bootstrap):
             assert not loop.ready()
             assert output.stops == 0
             assert stream.request_handoff_activation()
-        wait_for(lambda: all(worker[1].snapshot()['completed'] == 5 for worker in workers))
+        accepted = 3 if precommitted else 5
+        wait_for(lambda: all(worker[1].snapshot()['completed'] == accepted for worker in workers))
         for worker in workers:
             worker[1].request_drain()
         wait_for(lambda: all(worker[1].snapshot()['local_drained'] for worker in workers))
         for consumer, handoff, stream, output, loop, _ in workers:
             state = handoff.snapshot()
-            assert state['accepted'] == state['completed'] == 5
+            assert state['accepted'] == state['completed'] == accepted
             assert state['active'] == state['pending_bytes'] == state['pending_deliveries'] == 0
             assert not state['blocked_reasons']
             assert not loop.ready()
             assert output.stops == 1
             assert len(stream.handoff_offsets()) == 1
             assert stream.handoff_offsets()[0]['next_offset'] == 5
-            for partition in consumer.assignment():
-                assert consumer.committed(partition) == 5
+        broker_offsets = admin.list_consumer_group_offsets(group, partitions=partitions)
+        assert set(broker_offsets) == set(partitions)
+        assert all(value.offset == 5 for value in broker_offsets.values())
     finally:
         for consumer, _, _, _, loop, watch in workers:
             watch.kill()

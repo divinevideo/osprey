@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import gevent
-from kafka import TopicPartition
+from kafka import OffsetAndMetadata, TopicPartition
 from osprey.worker.sinks.output_handoff import OutputHandoff, SourcePosition
 from osprey.worker.sinks.sink.input_stream import KafkaInputStream
 
@@ -16,6 +16,11 @@ class Consumer:
         self.assigned = {TopicPartition('actions', 0)}
         self.polls = 0
         self.on_poll: Any = None
+        self.config = {'group_id': 'synthetic-group'}
+        self._coordinator = SimpleNamespace(config={'enable_auto_commit': True})
+        self._subscription = SimpleNamespace(
+            all_consumed_offsets=lambda: {p: OffsetAndMetadata(42, '') for p in self.assigned}
+        )
 
     def subscription(self) -> set[str]:
         return {'actions'}
