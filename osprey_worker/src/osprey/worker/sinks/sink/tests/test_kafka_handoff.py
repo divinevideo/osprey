@@ -16,7 +16,7 @@ class Consumer:
         self.assigned = {TopicPartition('actions', 0)}
         self.polls = 0
         self.on_poll: Any = None
-        self.config = {'group_id': 'synthetic-group'}
+        self.config = {'group_id': 'synthetic-group', 'auto_offset_reset': 'none'}
         self._coordinator = SimpleNamespace(config={'enable_auto_commit': True})
         self._subscription = SimpleNamespace(
             all_consumed_offsets=lambda: {p: OffsetAndMetadata(42, '') for p in self.assigned}
