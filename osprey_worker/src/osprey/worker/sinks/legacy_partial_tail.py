@@ -40,16 +40,20 @@ class RecordedEvaluation:
 
 @dataclass(frozen=True)
 class PreparedLegacyTail:
-    """serialized_size is the UTF-8 byte length of the JSON-encoded (columns, rows).
+    """serialized_size measures the prepared payload, not the manifest or transport.
 
-    It bounds preparation capacity in the same unit as the input check; it is not
-    the size of any transport's insert payload.
+    See prepared_payload_size for the encoding used to bound preparation capacity.
     """
 
     columns: tuple[str, ...] = field(repr=False)
     rows: tuple[tuple[Any, ...], ...] = field(repr=False)
     sources: tuple[tuple[str, int, int], ...] = field(repr=False)
     serialized_size: int
+
+
+def prepared_payload_size(columns: tuple[str, ...], rows: tuple[tuple[Any, ...], ...]) -> int:
+    """Count UTF-8 bytes of JSON-encoded columns and rows, without ASCII escaping."""
+    return len(json.dumps((columns, rows), ensure_ascii=False).encode('utf-8'))
 
 
 def prepare_legacy_partial_tail(
@@ -145,7 +149,7 @@ def prepare_legacy_partial_tail(
     defaults = {column: 0 if isinstance(value, (int, float)) else '' for column, value in samples.items()}
     rows = tuple(tuple(row.get(column, defaults[column]) for column in columns) for row in buffered)
     try:
-        size = len(json.dumps((columns, rows), ensure_ascii=False).encode('utf-8'))
+        size = prepared_payload_size(columns, rows)
     except UnicodeEncodeError:
         # ASCII JSON can decode to a string containing an unpaired surrogate.
         raise LegacyTailPreparationError('invalid evaluation object') from None

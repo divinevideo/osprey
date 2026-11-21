@@ -63,7 +63,9 @@ complete never-submitted per-worker tail and required privacy outcomes, verify
 the current schema, and supply the verified authoritative client.
 
 The encoder produces reviewable bytes containing the exact prepared payload,
-legacy container identity and schema hash. It preserves scalar types and float
+legacy container identity and schema hash. The prepared payload uses the same
+UTF-8 capacity check when preparing, encoding, and reading it back. The manifest
+file itself has a separate size limit. It preserves scalar types and float
 bits, including NULL, signed zero and non-finite values, without executable
 deserialization. Store the manifest in a private, owned POSIX directory on
 durable storage, with private regular files and reliable exclusive creation,
