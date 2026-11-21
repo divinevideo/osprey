@@ -91,7 +91,7 @@ def test_do_not_combine_workers_or_split_tail_into_individual_batches() -> None:
 
 @pytest.mark.parametrize('offsets', [(1, 1), (2, 1), (-1, 0)])
 def test_duplicate_reversed_or_negative_source_positions_refuse(offsets: tuple[int, int]) -> None:
-    with pytest.raises(LegacyTailPreparationError):
+    with pytest.raises(LegacyTailPreparationError, match='source offsets must increase'):
         prepare_legacy_partial_tail([evaluation(n, {}) for n in offsets], allowed_columns=COLUMNS)
 
 
@@ -153,19 +153,19 @@ def test_cannot_disable_preparation_capacity(limit: int) -> None:
 
 
 @pytest.mark.parametrize(
-    'field,value',
+    'field,value,message',
     [
-        ('partition', True),
-        ('offset', True),
-        ('action_id', True),
-        ('topic', ''),
-        ('topic', 1),
-        ('topic', b'synthetic'),
-        ('topic', ['synthetic']),
+        ('partition', True, 'invalid source position'),
+        ('offset', True, 'source offsets must increase'),
+        ('action_id', True, 'invalid action identifier'),
+        ('topic', '', 'invalid source position'),
+        ('topic', 1, 'invalid source position'),
+        ('topic', b'synthetic', 'invalid source position'),
+        ('topic', ['synthetic'], 'invalid source position'),
     ],
 )
-def test_invalid_source_and_identity_types_refuse(field: str, value: object) -> None:
-    with pytest.raises(LegacyTailPreparationError):
+def test_invalid_source_and_identity_types_refuse(field: str, value: object, message: str) -> None:
+    with pytest.raises(LegacyTailPreparationError, match=message):
         prepare_legacy_partial_tail([replace(evaluation(0, {}), **{field: value})], allowed_columns=COLUMNS)
 
 
