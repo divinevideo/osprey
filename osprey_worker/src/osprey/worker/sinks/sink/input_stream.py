@@ -457,6 +457,11 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
             raise ValueError('maintenance must be configured before Kafka intake')
         if not self._consumer.config.get('group_id'):
             raise ValueError('maintenance requires a named Kafka group')
+        if (
+            self._consumer.config.get('auto_offset_reset') != 'none'
+            or self._consumer._subscription.has_default_offset_reset_policy()
+        ):
+            raise ValueError('maintenance requires automatic offset reset to be disabled (none)')
         self._handoff = handoff
         if start_paused:
             handoff.pause_before_intake()

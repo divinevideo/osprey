@@ -16,10 +16,11 @@ class Consumer:
         self.assigned = {TopicPartition('actions', 0)}
         self.polls = 0
         self.on_poll: Any = None
-        self.config = {'group_id': 'synthetic-group'}
+        self.config = {'group_id': 'synthetic-group', 'auto_offset_reset': 'none'}
         self._coordinator = SimpleNamespace(config={'enable_auto_commit': True})
         self._subscription = SimpleNamespace(
-            all_consumed_offsets=lambda: {p: OffsetAndMetadata(42, '') for p in self.assigned}
+            has_default_offset_reset_policy=lambda: False,
+            all_consumed_offsets=lambda: {p: OffsetAndMetadata(42, '') for p in self.assigned},
         )
 
     def subscription(self) -> set[str]:
@@ -136,9 +137,10 @@ def commit_fixture() -> tuple[Any, Any, Any, Any]:
     handoff = OutputHandoff(enabled=True)
     consumer = Consumer()
     consumer._subscription = SimpleNamespace(
+        has_default_offset_reset_policy=lambda: False,
         all_consumed_offsets=lambda: {
             TopicPartition('actions', 0): OffsetAndMetadata(42, ''),
-        }
+        },
     )
     consumer.commit_callback = None
     consumer.commits = 0
