@@ -1,6 +1,7 @@
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 from osprey.worker.sinks.legacy_partial_tail import (
@@ -104,6 +105,20 @@ def test_100th_row_cannot_be_claimed_as_unsubmitted_partial_tail() -> None:
 def test_non_object_evaluations_refuse(features: object) -> None:
     with pytest.raises(LegacyTailPreparationError, match='evaluation object'):
         prepare_legacy_partial_tail([evaluation(0, features)], allowed_columns=COLUMNS)
+
+
+@pytest.mark.parametrize(
+    'inputs',
+    [
+        [{'topic': 'synthetic-input', 'partition': 0}],
+        [evaluation(0, {}), {'topic': 'synthetic-input', 'partition': 0}],
+        [evaluation(0, {}, timestamp=TIME.isoformat())],
+        [evaluation(0, {}, timestamp=None)],
+    ],
+)
+def test_malformed_evaluation_objects_and_timestamps_refuse(inputs: list[Any]) -> None:
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail(inputs, allowed_columns=COLUMNS)
 
 
 def test_invalid_json_and_unknown_columns_refuse_without_exposing_content() -> None:

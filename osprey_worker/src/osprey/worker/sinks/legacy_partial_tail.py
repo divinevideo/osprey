@@ -66,6 +66,8 @@ def prepare_legacy_partial_tail(
         raise LegacyTailPreparationError('partial tail requires fewer than 100 rows')
     if not evaluations:
         return None
+    if not all(isinstance(item, RecordedEvaluation) and isinstance(item.timestamp, datetime) for item in evaluations):
+        raise LegacyTailPreparationError('invalid evaluation object')
 
     source = (evaluations[0].topic, evaluations[0].partition)
     last_offset = -1
