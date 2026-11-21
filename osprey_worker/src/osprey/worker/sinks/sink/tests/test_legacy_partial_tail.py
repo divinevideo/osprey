@@ -170,6 +170,15 @@ def test_capacity_failure_never_returns_a_truncated_batch() -> None:
         prepare_legacy_partial_tail([evaluation(0, {'Name': 'x' * 1024})], allowed_columns=COLUMNS, max_bytes=128)
 
 
+def test_capacity_counts_utf8_bytes_not_ascii_escapes() -> None:
+    text = '\u4e2d' * 50_000  # 150,000 UTF-8 bytes, 300,000 bytes once ASCII-escaped
+    item = evaluation(0, {}, extracted_features_json=json.dumps({'Name': text}, ensure_ascii=False))
+    batch = prepare_legacy_partial_tail([item], allowed_columns=COLUMNS, max_bytes=200_000)
+    assert batch is not None
+    assert batch.rows[0][batch.columns.index('Name')] == text
+    assert batch.serialized_size == len(json.dumps((batch.columns, batch.rows), ensure_ascii=False).encode())
+
+
 def test_input_list_changes_cannot_mutate_prepared_payload() -> None:
     inputs = [evaluation(0, {'Name': 'private-synthetic-value'})]
     batch = prepare_legacy_partial_tail(inputs, allowed_columns=COLUMNS)

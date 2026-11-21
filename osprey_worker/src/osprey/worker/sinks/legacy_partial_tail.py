@@ -40,6 +40,12 @@ class RecordedEvaluation:
 
 @dataclass(frozen=True)
 class PreparedLegacyTail:
+    """serialized_size is the UTF-8 byte length of the JSON-encoded (columns, rows).
+
+    It bounds preparation capacity in the same unit as the input check; it is not
+    the size of any transport's insert payload.
+    """
+
     columns: tuple[str, ...] = field(repr=False)
     rows: tuple[tuple[Any, ...], ...] = field(repr=False)
     sources: tuple[tuple[str, int, int], ...] = field(repr=False)
@@ -136,7 +142,7 @@ def prepare_legacy_partial_tail(
     columns = tuple(samples)
     defaults = {column: 0 if isinstance(value, (int, float)) else '' for column, value in samples.items()}
     rows = tuple(tuple(row.get(column, defaults[column]) for column in columns) for row in buffered)
-    size = len(json.dumps((columns, rows)).encode())
+    size = len(json.dumps((columns, rows), ensure_ascii=False).encode())
     if size > max_bytes:
         raise LegacyTailPreparationError('preparation capacity exceeded')
     return PreparedLegacyTail(
