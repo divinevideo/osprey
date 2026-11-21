@@ -44,10 +44,13 @@ LabelTargetEvent: str = JsonData(
 # Entity version for use with LabelAdd/HasLabel (needs EntityT, not plain str).
 # Type 'ReportedEventId' matches kind1984_report.sml so labels are shared
 # across report rules and label routing rules (e.g., human_reviewed guard).
+# Missing targets on unrelated or hash-only events are expected omissions;
+# dependent rules remain unevaluated rather than receiving an empty entity.
 LabelTargetEventEntity: Entity[str] = EntityJson(
   type='ReportedEventId',
   path='$.label_target_event',
-  coerce_type=True
+  coerce_type=True,
+  required=False,
 )
 
 # AUTHORITATIVE author of the labelled event, resolved from that event rather
