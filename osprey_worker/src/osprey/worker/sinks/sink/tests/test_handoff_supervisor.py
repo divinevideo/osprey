@@ -16,7 +16,10 @@ def test_supervisor_joins_accepted_handlers_before_final_output_flush() -> None:
     supervisor = HandoffSupervisor(
         handoff,
         SimpleNamespace(
-            holding=True, request_handoff_commit=lambda: calls.append('commit'), handoff_offsets=lambda: []
+            holding=True,
+            request_handoff_commit=lambda: calls.append('commit'),
+            handoff_offsets=lambda: [],
+            handoff_startup_status=lambda: {},
         ),
         SimpleNamespace(stop=lambda: calls.append('flush')),
         emit=lambda status: None,
@@ -45,7 +48,12 @@ def test_deadline_blocks_without_cancelling_ongoing_output() -> None:
 
     supervisor = HandoffSupervisor(
         handoff,
-        SimpleNamespace(holding=True, request_handoff_commit=lambda: False, handoff_offsets=lambda: []),
+        SimpleNamespace(
+            holding=True,
+            request_handoff_commit=lambda: False,
+            handoff_offsets=lambda: [],
+            handoff_startup_status=lambda: {},
+        ),
         SimpleNamespace(stop=stop),
         deadline_seconds=2,
         clock=lambda: clock[0],

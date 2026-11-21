@@ -445,15 +445,25 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
         self._accepted_next_offsets: dict[tuple[str, int], int] = {}
         self._commit_state = 'unrequested'
         self._committed_offsets: dict[Any, Any] = {}
+        self._activation_epoch: int | None = None
+        self._startup_auto_commit: bool | None = None
+        self._startup_positions: dict[Any, Any] = {}
+        self._startup_position_epoch = -1
 
     def configure_handoff(self, handoff: OutputHandoff, *, start_paused: bool = False) -> None:
         if not handoff.enabled:
             return
         if self._iterator is not None or self._handoff is not None:
             raise ValueError('maintenance must be configured before Kafka intake')
+        if not self._consumer.config.get('group_id'):
+            raise ValueError('maintenance requires a named Kafka group')
         self._handoff = handoff
         if start_paused:
-            handoff.request_drain()
+            handoff.pause_before_intake()
+            # Both periodic commits and rejoin preparation read this pinned
+            # coordinator setting. Startup membership must not write offsets.
+            self._startup_auto_commit = self._consumer._coordinator.config['enable_auto_commit']
+            self._consumer._coordinator.config['enable_auto_commit'] = False
         stream = self
 
         class Listener(ConsumerRebalanceListener):  # type: ignore[misc]  # Pinned kafka-python has no type metadata.
@@ -476,11 +486,74 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
     def holding(self) -> bool:
         return self._held and time.monotonic() - self._last_membership_poll <= 2
 
+    def request_handoff_activation(self) -> bool:
+        """Signal-safe request; the polling owner validates metadata before opening."""
+        handoff = self._handoff
+        if (
+            handoff is None
+            or handoff.snapshot()['state'] != 'paused'
+            or not self.holding
+            or not self._assignment_seen
+            or self._activation_epoch is not None
+        ):
+            return False
+        self._activation_epoch = self._membership_epoch
+        return True
+
+    def handoff_startup_status(self) -> dict[str, Any]:
+        # The poll owner publishes metadata. Never wait behind its coordinator
+        # I/O here: even poll(timeout_ms=250) can block in discovery/rejoin.
+        handoff = self._handoff
+        state = handoff.snapshot() if handoff is not None else {}
+        offsets = self._startup_positions if state.get('state') == 'paused' else {}
+        return {
+            'ready': bool(
+                state.get('state') == 'paused'
+                and self.holding
+                and self._assignment_seen
+                and self._startup_position_epoch == self._membership_epoch
+                and offsets
+                and not state['pending_bytes']
+                and not state['pending_batches']
+                and not state['pending_deliveries']
+                and not state['blocked_reasons']
+            ),
+            'membership_epoch': self._membership_epoch,
+            'positions': [
+                {'topic': partition.topic, 'partition': partition.partition, 'next_offset': value.offset}
+                for partition, value in sorted(offsets.items())
+            ],
+        }
+
+    def _activate_after_poll(self) -> None:
+        if self._activation_epoch is None:
+            return
+        handoff = self._handoff
+        assert handoff is not None
+        if self._activation_epoch != self._membership_epoch:
+            self._activation_epoch = None
+            handoff.block('membership_changed')
+            return
+        if handoff.snapshot()['state'] != 'paused':
+            self._activation_epoch = None
+            return
+        assignment = set(self._consumer.assignment())
+        offsets = self._consumer._subscription.all_consumed_offsets()
+        if not assignment or set(offsets) != assignment or self._commit_state != 'unrequested':
+            return
+        if handoff.activate_before_intake():
+            if self._startup_auto_commit is not None:
+                self._consumer._coordinator.config['enable_auto_commit'] = self._startup_auto_commit
+                self._startup_auto_commit = None
+            self._activation_epoch = None
+
     def request_handoff_commit(self) -> bool:
         handoff = self._handoff
         if handoff is None:
             return False
-        with self._consumer_lock:
+        if not self._consumer_lock.acquire(timeout=0.05):
+            return False
+        try:
             if self._commit_state in {'pending', 'confirmed'}:
                 return True
             if self._commit_state == 'failed':
@@ -534,6 +607,8 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
                 handoff.block('offset_commit_failed')
                 return False
             return True
+        finally:
+            self._consumer_lock.release()
 
     def handoff_offsets(self) -> list[dict[str, Any]]:
         return [
@@ -575,6 +650,11 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
                     self._accepted_next_offsets[(position.topic, position.partition)] = position.offset + 1
                 self._last_membership_poll = time.monotonic()
                 self._held = held
+                assignment = set(self._consumer.assignment())
+                offsets = self._consumer._subscription.all_consumed_offsets() if held else {}
+                self._startup_positions = dict(offsets) if assignment and set(offsets) == assignment else {}
+                self._startup_position_epoch = self._membership_epoch
+                self._activate_after_poll()
                 if self._commit_state == 'confirmed' and held:
                     handoff.certify(committed=True)
             for record, position in zip(records, positions):

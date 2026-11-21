@@ -43,7 +43,7 @@ class HandoffSupervisor:
     def tick(self) -> None:
         now = self._clock()
         state = self._handoff.snapshot()
-        if state['state'] != 'running':
+        if state['state'] not in {'running', 'paused'}:
             if self._started is None:
                 self._started = now
             if not state['local_drained'] and now - self._started >= self._deadline:
@@ -60,6 +60,7 @@ class HandoffSupervisor:
                     'event': 'osprey_migration_handoff',
                     'local': status,
                     'offsets': self._input.handoff_offsets(),
+                    'startup': self._input.handoff_startup_status(),
                     'acceptance': 'local_accounting_only',
                 }
             )

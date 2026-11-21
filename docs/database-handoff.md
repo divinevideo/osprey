@@ -13,6 +13,8 @@ serialized-output budget and a 120-second drain observation deadline; configure
 these with `OSPREY_MIGRATION_MAX_PENDING_BYTES` and
 `OSPREY_MIGRATION_DRAIN_DEADLINE_SECONDS`. The deadline is an observation bound,
 not a measured maintenance or rollback budget.
+Maintenance requires an explicitly configured `OSPREY_KAFKA_GROUP_ID`; consumers
+without a named group are rejected before polling.
 
 Send `SIGUSR1` to request a planned drain. In maintenance mode `SIGTERM` and
 `SIGINT` request the same cooperative work. The signal callback only sets the
@@ -52,6 +54,32 @@ replacement workers that must not consume before the global gates authorize them
 There is no automatic resume from a blocked or drained process; use the reviewed
 replacement sequence after verifying the barrier.
 
+Startup pause is a separate `paused` state. It accepts no records, performs no
+final output shutdown or offset commit, and has no drain deadline. Ordinary
+group assignments may change while these untouched replacement workers join.
+The pinned coordinator's automatic commits are disabled throughout startup
+pause, including rebalance-time commits. The original commit policy is restored
+only after explicit activation. Missing broker offsets must remain missing;
+startup must not manufacture a recovery boundary from a reset position.
+The `startup` receipt reports readiness, a local membership epoch, and consumer
+positions. These positions are not acknowledged commit receipts. Independently
+compare every partition with the recorded global handoff boundary and broker
+commits, verify complete membership, and pass all database authority gates.
+Only then send `SIGUSR2` to each pristine paused worker to request activation.
+The poll owner checks complete position metadata and the request's membership
+epoch before opening admission. A group change after the request blocks it.
+Activation never resumes a running, drained or blocked worker. A drain request
+also permanently ends startup eligibility. Inspect the resulting state and real
+publishing; a successfully delivered signal is not proof of activation.
+Cancellation of a never-activated startup reports `startup_cancelled` and stays
+blocked. It does not commit a reset-derived position or certify a drained
+boundary. This includes termination signals during a rollout cancellation.
+Receipt positions are cached by the poll owner and expire for readiness when
+membership polling is stale. Receipt generation never waits for Kafka I/O, and
+final-commit lock acquisition is bounded so coordinator outages cannot suspend
+deadline supervision. An expired deadline reports failure without cancelling
+that I/O or accepted work.
+
 Private worker logs emit `osprey_migration_handoff` on state changes and at bounded
 intervals. Inspect the image and command independently and collect every worker's
 receipt. Require accepted = completed + intentional skips, zero failures, active
@@ -75,3 +103,23 @@ ClickHouse/Kafka and failure rehearsals, prove the initial transition's coverage
 and measure the complete forward and abort paths. Keep deployment endpoint,
 credential, image and authority changes in their separately reviewed operational
 configuration. This source feature does not perform them.
+
+For the isolated broker regression, use a disposable Kafka 3.9.0 broker with
+three partitions and a loopback advertised listener. Set
+`OSPREY_HANDOFF_TEST_KAFKA=127.0.0.1:<port>` and run
+`pytest osprey_worker/src/osprey/worker/sinks/sink/tests/test_native_kafka_handoff.py`
+in the repository's test environment. The test creates its own synthetic topic
+and group, forces three members to join separately, checks that startup never
+consumes or closes outputs, explicitly activates all members, and independently
+reads their drained offsets back from the broker. Its child process applies the
+same early gevent patch as the worker command. The test is skipped when the
+broker variable is absent and rejects non-loopback addresses. This proves the
+intake/offset path; it does not exercise moderation, ClickHouse, recovery,
+production load, or the global handoff barrier.
+The native cases use a separate admin OffsetFetch, check both absent and seeded
+offsets through rebalances and a full automatic-commit interval, and verify
+exact broker coverage after draining. The owning consumer's commit cache is
+not independent broker evidence.
+An additional native case sends a real termination signal before activation and
+verifies that a previously absent broker offset stays absent despite the local
+latest-reset position pointing past queued records.
