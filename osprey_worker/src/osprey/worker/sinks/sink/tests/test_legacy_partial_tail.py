@@ -152,7 +152,18 @@ def test_cannot_disable_preparation_capacity(limit: int) -> None:
         prepare_legacy_partial_tail([], allowed_columns=COLUMNS, max_bytes=limit)
 
 
-@pytest.mark.parametrize('field,value', [('partition', True), ('offset', True), ('action_id', True), ('topic', '')])
+@pytest.mark.parametrize(
+    'field,value',
+    [
+        ('partition', True),
+        ('offset', True),
+        ('action_id', True),
+        ('topic', ''),
+        ('topic', 1),
+        ('topic', b'synthetic'),
+        ('topic', ['synthetic']),
+    ],
+)
 def test_invalid_source_and_identity_types_refuse(field: str, value: object) -> None:
     with pytest.raises(LegacyTailPreparationError):
         prepare_legacy_partial_tail([replace(evaluation(0, {}), **{field: value})], allowed_columns=COLUMNS)

@@ -72,7 +72,7 @@ def prepare_legacy_partial_tail(
     input_bytes = 0
     buffered: list[dict[str, Any]] = []
     for item in evaluations:
-        if not item.topic or type(item.partition) is not int or item.partition < 0:
+        if type(item.topic) is not str or not item.topic or type(item.partition) is not int or item.partition < 0:
             raise LegacyTailPreparationError('invalid source position')
         if (item.topic, item.partition) != source:
             raise LegacyTailPreparationError('tail requires one source partition')
