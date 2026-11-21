@@ -170,6 +170,20 @@ def test_capacity_failure_never_returns_a_truncated_batch() -> None:
         prepare_legacy_partial_tail([evaluation(0, {'Name': 'x' * 1024})], allowed_columns=COLUMNS, max_bytes=128)
 
 
+def test_prepared_payload_capacity_includes_generated_columns_and_values() -> None:
+    item = evaluation(0, {})
+    columns = ('__time', '__action_id')
+    rows = ((TIME.isoformat(), 0),)
+    size = len(json.dumps((columns, rows), ensure_ascii=False).encode())
+    assert len(item.extracted_features_json.encode()) < size
+
+    batch = prepare_legacy_partial_tail([item], allowed_columns=COLUMNS, max_bytes=size)
+    assert batch is not None
+    assert batch.serialized_size == size
+    with pytest.raises(LegacyTailPreparationError, match='preparation capacity exceeded'):
+        prepare_legacy_partial_tail([item], allowed_columns=COLUMNS, max_bytes=size - 1)
+
+
 def test_capacity_counts_utf8_bytes_not_ascii_escapes() -> None:
     text = '\u4e2d' * 50_000  # 150,000 UTF-8 bytes, 300,000 bytes once ASCII-escaped
     item = evaluation(0, {}, extracted_features_json=json.dumps({'Name': text}, ensure_ascii=False))
