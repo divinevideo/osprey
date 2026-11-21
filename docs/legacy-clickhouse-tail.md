@@ -44,3 +44,45 @@ Unit tests cover the transform and refusal conditions. Comparing synthetic
 payloads with the actual pinned legacy image can verify push/stop equivalence;
 it does not establish live source coverage, schema compatibility, materialized
 view effects or a safe runtime fence.
+
+## One-time operation ownership
+
+`osprey.worker.sinks.legacy_tail_attempt` adds an operations-only manifest codec
+and submission guard. It is unwired from workers and has no command-line entrypoint.
+The caller must first establish and retain the real admission fence, prove the
+complete never-submitted per-worker tail and required privacy outcomes, verify
+the current schema, and supply the verified authoritative client.
+
+The encoder produces reviewable bytes containing the exact prepared payload,
+legacy container identity and schema hash. It preserves scalar types and float
+bits, including NULL, signed zero and non-finite values, without executable
+deserialization. Store the manifest in a private, owned POSIX directory on
+durable storage, with private regular files and reliable exclusive creation,
+atomic replacement and file/directory `fsync`. Retain its reviewed SHA256.
+The schema hash binds that review; the submission guard does not query or
+certify the live schema, authority or source boundaries.
+
+Before constructing the Native sender, submission exclusively reserves one
+`attempt-<legacy-container-id>.json` receipt and syncs both the receipt and its
+directory. The receipt retains the entire original manifest and query ID.
+Every existing receipt blocks another submission for that container, including
+confirmed, unknown, `NOT_SENT`, incomplete or corrupt records. Changing the
+manifest does not create a new attempt for the same container.
+
+Confirmation releases the in-memory batch only after the outcome receipt is
+durably replaced. An unknown insert, pre-transport failure or outcome-write
+failure retains the batch and blocks another attempt. A process crash leaves
+the reservation for independent settlement. There is no automatic replay,
+re-arm, receipt deletion or reconciliation path.
+
+Keep the same operations directory and truthful container identity across
+restarts. A fresh directory or invented identity cannot prove that an insert
+was never attempted. These are one-time handoff receipts, separate from service
+ingestion. They neither deduplicate overlapping tails from different workers
+nor establish completeness. A `None` result from partial-tail preparation needs
+no submission; all other handoff gates still apply.
+
+Tests use synthetic manifests, filesystem failures, competing owners and process
+loss. Real Native request and aggregate behavior needs isolated integration
+validation before operational use. No production submission is activated by
+adding this module.
