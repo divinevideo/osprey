@@ -1,9 +1,13 @@
 Import(rules=['models/base.sml'])
 
+# This shared model also runs for non-report events. Missing event/pubkey
+# targets are expected omissions: leave dependent rules unevaluated without
+# reporting an unexpected execution error. Base event metadata stays required.
 ReportedEventId: Entity[str] = EntityJson(
   type='ReportedEventId',
   path='$.reported_event_id',
-  coerce_type=True
+  coerce_type=True,
+  required=False,
 )
 
 # Plain string version for UDF arguments (BanNostrEvent, AgeRestrictNostrEvent).
@@ -69,7 +73,8 @@ EventReporterId: Entity[str] = Entity(
 ReportedPubkey: Entity[str] = EntityJson(
   type='ReportedPubkey',
   path='$.reported_pubkey',
-  coerce_type=True
+  coerce_type=True,
+  required=False,
 )
 
 # Plain-string form of the reported pubkey, for `!= ''` guards. The Entity form
