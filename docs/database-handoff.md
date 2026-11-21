@@ -31,6 +31,10 @@ an independent bounded transport, with both application and physical transport
 replay disabled. Any unconfirmed insert retains its payload and blocks the
 handoff. It is never automatically retried, dropped, or repaired by replaying
 classification or sibling moderation effects.
+The response must be HTTP 200 with the exact armed query identifier, an empty
+body and a matching SDK summary. Missing or different identifiers, unexpected
+status and response content retain the batch as unknown. A 200 response alone
+cannot establish success: [ClickHouse can return late errors in the body](https://clickhouse.com/docs/interfaces/http#http-response-codes-caveats).
 
 Kafka output retains delivery payloads until their individual futures acknowledge
 success. A producer flush alone cannot establish delivery. Its pending payloads
@@ -43,6 +47,10 @@ transactional. Already accepted oversized output remains
 owned and blocks further admission; arbitrary allocations inside classification
 are outside this bound. Completed source records become counters and per-partition
 boundaries rather than an ever-growing collection of action objects.
+Unexpected rule-node errors also block the handoff, even when the executor
+returns a partial result. That result still reaches outputs once; classification
+and sibling effects are never replayed. Expected optional UDF outcomes retain
+the executor's existing policy and do not become unexpected failures.
 
 While held, assigned partitions are paused and polling continues to service group
 membership. Assignment changes invalidate local drain accounting, including a
