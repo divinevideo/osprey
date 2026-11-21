@@ -251,20 +251,23 @@ module.submit_legacy_tail_manifest(None,directory=Path(sys.argv[1]),manifest_nam
 def test_manifest_codec_preserves_scalar_types_and_float_bits(tmp_path: Path, monkeypatch: Any, value: Any) -> None:
     tmp_path.chmod(0o700)
     name, digest = manifest(tmp_path, value)
+    received: list[Any] = []
 
     class Sender:
         def send(self, table: str, columns: Any, rows: Any, query_id: str) -> Any:
-            actual = rows[0][2]
-            assert type(actual) is type(value)
-            if isinstance(value, float):
-                assert struct.pack('>d', actual) == struct.pack('>d', value)
-            else:
-                assert actual == value
+            received.append(rows[0][2])
             return SimpleNamespace(outcome='unknown', query_id=query_id)
 
     monkeypatch.setattr(owner, 'NativeInsertOnce', lambda client: Sender(), raising=False)
     result = submit(tmp_path, name, digest)
     assert result.outcome == 'unknown' and result.pending is not None
+    assert len(received) == 1
+    actual = received[0]
+    assert type(actual) is type(value)
+    if isinstance(value, float):
+        assert struct.pack('>d', actual) == struct.pack('>d', value)
+    else:
+        assert actual == value
 
 
 @pytest.mark.parametrize(
