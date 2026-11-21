@@ -144,7 +144,11 @@ def prepare_legacy_partial_tail(
     columns = tuple(samples)
     defaults = {column: 0 if isinstance(value, (int, float)) else '' for column, value in samples.items()}
     rows = tuple(tuple(row.get(column, defaults[column]) for column in columns) for row in buffered)
-    size = len(json.dumps((columns, rows), ensure_ascii=False).encode())
+    try:
+        size = len(json.dumps((columns, rows), ensure_ascii=False).encode('utf-8'))
+    except UnicodeEncodeError:
+        # ASCII JSON can decode to a string containing an unpaired surrogate.
+        raise LegacyTailPreparationError('invalid evaluation object') from None
     if size > max_bytes:
         raise LegacyTailPreparationError('preparation capacity exceeded')
     return PreparedLegacyTail(

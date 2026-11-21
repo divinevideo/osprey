@@ -31,7 +31,8 @@ The transform is pinned to worker source
   evaluations, mixed partitions, duplicate/reversed source offsets and excessive
   size refuse the whole preparation. There is no truncated success result.
   Size is counted in UTF-8 bytes, for both the recorded input and the
-  JSON-encoded prepared columns and rows (`serialized_size`).
+  JSON-encoded prepared columns and rows (`serialized_size`). Prepared values
+  must be encodable as UTF-8.
 
 Preparation does **not** prove that those evaluations form the complete buffer,
 that it was never submitted, or that required moderation effects succeeded.

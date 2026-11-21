@@ -179,6 +179,13 @@ def test_capacity_counts_utf8_bytes_not_ascii_escapes() -> None:
     assert batch.serialized_size == len(json.dumps((batch.columns, batch.rows), ensure_ascii=False).encode())
 
 
+@pytest.mark.parametrize('text', ['\ud800', '\udfff'])
+def test_unpaired_surrogate_in_prepared_value_refuses_tail(text: str) -> None:
+    items = [evaluation(0, {'Name': 'valid'}), evaluation(1, {'Name': text})]
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail(items, allowed_columns=COLUMNS)
+
+
 def test_input_list_changes_cannot_mutate_prepared_payload() -> None:
     inputs = [evaluation(0, {'Name': 'private-synthetic-value'})]
     batch = prepare_legacy_partial_tail(inputs, allowed_columns=COLUMNS)
