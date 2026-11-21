@@ -169,6 +169,7 @@ def run_rules_sink(
         _handoff_signals = [
             gevent.signal_handler(sig, handoff.request_drain) for sig in (signal.SIGUSR1, signal.SIGTERM, signal.SIGINT)
         ]
+        _handoff_signals.append(gevent.signal_handler(signal.SIGUSR2, input_stream.request_handoff_activation))
         gevent.spawn(supervisor.run)
 
     def factory() -> BaseSink:

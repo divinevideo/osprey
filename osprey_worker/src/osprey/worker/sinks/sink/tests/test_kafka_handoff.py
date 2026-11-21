@@ -115,6 +115,7 @@ def test_new_assignment_is_paused_and_invalidates_held_certificate() -> None:
     consumer = Consumer()
     stream = KafkaInputStream(consumer)
     stream.configure_handoff(handoff, start_paused=True)
+    handoff.request_drain()
     assert handoff.certify(committed=True)
     consumer.listener.on_partitions_revoked(consumer.assigned)
     consumer.assigned = {TopicPartition('actions', 1)}
@@ -146,6 +147,7 @@ def commit_fixture() -> tuple[Any, Any, Any, Any]:
     consumer.commit_async = commit_async
     stream = KafkaInputStream(consumer)
     stream.configure_handoff(handoff, start_paused=True)
+    handoff.request_drain()
     waiting = gevent.spawn(next, stream)
     gevent.sleep(0.02)
     return handoff, consumer, stream, waiting

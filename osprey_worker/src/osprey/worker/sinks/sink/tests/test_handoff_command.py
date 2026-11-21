@@ -11,9 +11,10 @@ import pytest
 
 
 @pytest.mark.parametrize('drain_signal', [signal.SIGUSR1, signal.SIGTERM, signal.SIGINT])
-def test_pooled_command_holds_and_flushes_after_real_signal(drain_signal: int) -> None:
+@pytest.mark.parametrize('start_paused', [False, True])
+def test_pooled_command_holds_and_flushes_after_real_signal(drain_signal: int, start_paused: bool) -> None:
     process = subprocess.Popen(
-        [sys.executable, __file__, '--pooled-child'],
+        [sys.executable, __file__, '--pooled-child', *(['--start-paused'] if start_paused else [])],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         env={**os.environ, 'DD_DOGSTATSD_DISABLE': 'true'},
@@ -24,11 +25,15 @@ def test_pooled_command_holds_and_flushes_after_real_signal(drain_signal: int) -
             selector.register(process.stdout, selectors.EVENT_READ)
             deadline = time.monotonic() + 20
             ready = False
+            activated = False
             while time.monotonic() < deadline and process.poll() is None:
                 if selector.select(timeout=0.2):
                     chunk = os.read(process.stdout.fileno(), 65536)
                     output.extend(chunk)
                     assert len(output) <= 1048576, 'oversized synthetic command output'
+                    if start_paused and not activated and b'HANDOFF_TEST_START_PAUSED' in output:
+                        process.send_signal(signal.SIGUSR2)
+                        activated = True
                     if b'HANDOFF_TEST_READY' in output:
                         ready = True
                         break
@@ -103,7 +108,8 @@ def pooled_child() -> None:
     )
     config = SimpleNamespace(
         get_str=lambda name, default: 'kafka' if name == 'OSPREY_INPUT_STREAM_SOURCE' else default,
-        get_bool=lambda name, default: name == 'OSPREY_MIGRATION_HANDOFF',
+        get_bool=lambda name, default: name == 'OSPREY_MIGRATION_HANDOFF'
+        or (name == 'OSPREY_MIGRATION_START_PAUSED' and '--start-paused' in sys.argv),
         get_int=lambda name, default: default,
         expect_int=lambda name: 2,
     )
@@ -116,6 +122,13 @@ def pooled_child() -> None:
     task = None
 
     def observe():
+        if '--start-paused' in sys.argv:
+            while stream._handoff is None or consumer.polls < 2:
+                gevent.sleep(0.01)
+            assert stream._handoff.snapshot()['state'] == 'paused'
+            assert stream._handoff.snapshot()['accepted'] == 0
+            assert not inserts and not commits
+            print('HANDOFF_TEST_START_PAUSED', flush=True)
         while stream._handoff is None or stream._handoff.snapshot()['completed'] != 1:
             gevent.sleep(0.01)
         print('HANDOFF_TEST_READY', flush=True)

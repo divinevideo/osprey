@@ -52,6 +52,20 @@ replacement workers that must not consume before the global gates authorize them
 There is no automatic resume from a blocked or drained process; use the reviewed
 replacement sequence after verifying the barrier.
 
+Startup pause is a separate `paused` state. It accepts no records, performs no
+final output shutdown or offset commit, and has no drain deadline. Ordinary
+group assignments may change while these untouched replacement workers join.
+The `startup` receipt reports readiness, a local membership epoch, and consumer
+positions. These positions are not acknowledged commit receipts. Independently
+compare every partition with the recorded global handoff boundary and broker
+commits, verify complete membership, and pass all database authority gates.
+Only then send `SIGUSR2` to each pristine paused worker to request activation.
+The poll owner checks complete position metadata and the request's membership
+epoch before opening admission. A group change after the request blocks it.
+Activation never resumes a running, drained or blocked worker. A drain request
+also permanently ends startup eligibility. Inspect the resulting state and real
+publishing; a successfully delivered signal is not proof of activation.
+
 Private worker logs emit `osprey_migration_handoff` on state changes and at bounded
 intervals. Inspect the image and command independently and collect every worker's
 receipt. Require accepted = completed + intentional skips, zero failures, active
@@ -75,3 +89,16 @@ ClickHouse/Kafka and failure rehearsals, prove the initial transition's coverage
 and measure the complete forward and abort paths. Keep deployment endpoint,
 credential, image and authority changes in their separately reviewed operational
 configuration. This source feature does not perform them.
+
+For the isolated broker regression, use a disposable Kafka 3.9.0 broker with
+three partitions and a loopback advertised listener. Set
+`OSPREY_HANDOFF_TEST_KAFKA=127.0.0.1:<port>` and run
+`pytest osprey_worker/src/osprey/worker/sinks/sink/tests/test_native_kafka_handoff.py`
+in the repository's test environment. The test creates its own synthetic topic
+and group, forces three members to join separately, checks that startup never
+consumes or closes outputs, explicitly activates all members, and independently
+reads their drained offsets back from the broker. Its child process applies the
+same early gevent patch as the worker command. The test is skipped when the
+broker variable is absent and rejects non-loopback addresses. This proves the
+intake/offset path; it does not exercise moderation, ClickHouse, recovery,
+production load, or the global handoff barrier.

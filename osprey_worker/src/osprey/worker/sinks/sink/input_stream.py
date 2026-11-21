@@ -445,6 +445,7 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
         self._accepted_next_offsets: dict[tuple[str, int], int] = {}
         self._commit_state = 'unrequested'
         self._committed_offsets: dict[Any, Any] = {}
+        self._activation_epoch: int | None = None
 
     def configure_handoff(self, handoff: OutputHandoff, *, start_paused: bool = False) -> None:
         if not handoff.enabled:
@@ -453,7 +454,7 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
             raise ValueError('maintenance must be configured before Kafka intake')
         self._handoff = handoff
         if start_paused:
-            handoff.request_drain()
+            handoff.pause_before_intake()
         stream = self
 
         class Listener(ConsumerRebalanceListener):  # type: ignore[misc]  # Pinned kafka-python has no type metadata.
@@ -475,6 +476,63 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
     @property
     def holding(self) -> bool:
         return self._held and time.monotonic() - self._last_membership_poll <= 2
+
+    def request_handoff_activation(self) -> bool:
+        """Signal-safe request; the polling owner validates metadata before opening."""
+        handoff = self._handoff
+        if (
+            handoff is None
+            or handoff.snapshot()['state'] != 'paused'
+            or not self.holding
+            or not self._assignment_seen
+            or self._activation_epoch is not None
+        ):
+            return False
+        self._activation_epoch = self._membership_epoch
+        return True
+
+    def handoff_startup_status(self) -> dict[str, Any]:
+        with self._consumer_lock:
+            handoff = self._handoff
+            state = handoff.snapshot() if handoff is not None else {}
+            assignment = set(self._consumer.assignment())
+            offsets = self._consumer._subscription.all_consumed_offsets() if state.get('state') == 'paused' else {}
+            return {
+                'ready': bool(
+                    state.get('state') == 'paused'
+                    and self.holding
+                    and assignment
+                    and set(offsets) == assignment
+                    and not state['pending_bytes']
+                    and not state['pending_batches']
+                    and not state['pending_deliveries']
+                    and not state['blocked_reasons']
+                ),
+                'membership_epoch': self._membership_epoch,
+                'positions': [
+                    {'topic': partition.topic, 'partition': partition.partition, 'next_offset': value.offset}
+                    for partition, value in sorted(offsets.items())
+                ],
+            }
+
+    def _activate_after_poll(self) -> None:
+        if self._activation_epoch is None:
+            return
+        handoff = self._handoff
+        assert handoff is not None
+        if self._activation_epoch != self._membership_epoch:
+            self._activation_epoch = None
+            handoff.block('membership_changed')
+            return
+        if handoff.snapshot()['state'] != 'paused':
+            self._activation_epoch = None
+            return
+        assignment = set(self._consumer.assignment())
+        offsets = self._consumer._subscription.all_consumed_offsets()
+        if not assignment or set(offsets) != assignment or self._commit_state != 'unrequested':
+            return
+        if handoff.activate_before_intake():
+            self._activation_epoch = None
 
     def request_handoff_commit(self) -> bool:
         handoff = self._handoff
@@ -575,6 +633,7 @@ class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
                     self._accepted_next_offsets[(position.topic, position.partition)] = position.offset + 1
                 self._last_membership_poll = time.monotonic()
                 self._held = held
+                self._activate_after_poll()
                 if self._commit_state == 'confirmed' and held:
                     handoff.certify(committed=True)
             for record, position in zip(records, positions):
