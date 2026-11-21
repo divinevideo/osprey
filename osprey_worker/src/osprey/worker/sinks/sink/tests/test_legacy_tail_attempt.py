@@ -7,13 +7,18 @@ import struct
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from osprey.worker.sinks import legacy_tail_attempt as owner
-from osprey.worker.sinks.legacy_partial_tail import PreparedLegacyTail
+from osprey.worker.sinks.legacy_partial_tail import (
+    PreparedLegacyTail,
+    RecordedEvaluation,
+    prepare_legacy_partial_tail,
+)
 
 SCHEMA = 'a' * 64
 CONTAINER = 'b' * 64
@@ -49,6 +54,37 @@ def submit(directory: Path, name: str, digest: str, schema: str = SCHEMA) -> Any
 
 def records(directory: Path) -> list[Path]:
     return list(directory.glob('attempt-*.json'))
+
+
+def test_manifest_round_trip_uses_prepared_utf8_capacity(tmp_path: Path, monkeypatch: Any) -> None:
+    tmp_path.chmod(0o700)
+    evaluation = RecordedEvaluation(
+        'synthetic-input',
+        0,
+        12,
+        7,
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        json.dumps({'FixtureValue': '界' * 100}, ensure_ascii=False),
+    )
+    batch = prepare_legacy_partial_tail([evaluation], allowed_columns=frozenset(prepared().columns))
+    assert batch is not None
+    monkeypatch.setattr(owner, 'MAX_PREPARATION_BYTES', batch.serialized_size)
+    body = owner.encode_legacy_tail_manifest(batch, legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
+    assert len(body) > batch.serialized_size
+    path = tmp_path / 'reviewed.json'
+    path.write_bytes(body)
+    path.chmod(0o600)
+
+    def send(table: str, columns: Any, rows: Any, query_id: str) -> Any:
+        return SimpleNamespace(outcome='unknown', query_id=query_id)
+
+    monkeypatch.setattr(owner, 'NativeInsertOnce', lambda client: SimpleNamespace(send=send))
+    result = submit(tmp_path, path.name, hashlib.sha256(body).hexdigest())
+    assert result.pending == batch
+
+    monkeypatch.setattr(owner, 'MAX_PREPARATION_BYTES', batch.serialized_size - 1)
+    with pytest.raises(owner.LegacyTailAttemptBlocked, match='partial tail capacity exceeded'):
+        owner.encode_legacy_tail_manifest(batch, legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
 
 
 def test_reservation_is_durable_before_native_send_and_confirmation_is_retained(
