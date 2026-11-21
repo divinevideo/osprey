@@ -1,9 +1,10 @@
 import abc
 import inspect
 import json
+import time
 from collections import deque
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Generic, Iterator, List, Optional, Sequence, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Generic, Iterator, List, Optional, Sequence, Type, TypeVar, Union, cast
 
 import gevent
 import msgpack
@@ -17,18 +18,21 @@ from google.protobuf.message import DecodeError
 from google.protobuf.message import Message as ProtoMessage
 from google.pubsub_v1 import PubsubMessage
 from kafka.consumer.fetcher import ConsumerRecord
+from kafka.consumer.subscription_state import ConsumerRebalanceListener
 from osprey.engine.executor.execution_context import Action
 from osprey.worker.lib.encryption.envelope import Envelope
 from osprey.worker.lib.instruments import metrics
 from osprey.worker.lib.osprey_shared.logging import get_logger
 from osprey.worker.lib.storage.postgres import Model, scoped_session
 from osprey.worker.lib.utils.dates import parse_go_timestamp
+from osprey.worker.sinks.output_handoff import Disposition, OutputHandoff, SourcePosition
 from osprey.worker.sinks.utils.acking_contexts import (
     BaseAckingContext,
     NoopAckingContext,
     PubSubMessageAckingContext,
     PullPubSubMessageContext,
 )
+from osprey.worker.sinks.utils.gevent import FairRLock
 from osprey.worker.sinks.utils.kafka import PatchedKafkaConsumer
 from pydantic import BaseModel
 from tenacity import RetryCallState, retry_if_exception_type, stop_never, wait_exponential
@@ -410,14 +414,190 @@ class PostgresInputStream(BaseInputStream[_ModelT]):
                     gevent.sleep(self._cooldown)
 
 
+class HandoffActionContext(NoopAckingContext[Action]):
+    """Offset accounting is separate from the unchanged steady-state Kafka ack."""
+
+    def __init__(self, action: Action, handoff: OutputHandoff, source: SourcePosition):
+        super().__init__(action)
+        self._handoff = handoff
+        self._source = source
+        self._disposition: Disposition = 'failed'
+
+    def set_disposition(self, disposition: Disposition) -> None:
+        self._disposition = disposition
+
+    def __exit__(self, exc_type, exc_value, exc_traceback) -> None:
+        self._handoff.finish(self._source, 'failed' if exc_type is not None or self._should_nack else self._disposition)
+
+
 class KafkaInputStream(BaseInputStream[BaseAckingContext[Action]]):
     """An input stream that consumes messages from a Kafka topic and yields Action objects wrapped in an AckingContext."""
 
     def __init__(self, kafka_consumer: PatchedKafkaConsumer):
         super().__init__()
         self._consumer: PatchedKafkaConsumer = kafka_consumer
+        self._handoff: OutputHandoff | None = None
+        self._consumer_lock = FairRLock()
+        self._assignment_seen = False
+        self._membership_epoch = 0
+        self._last_membership_poll = 0.0
+        self._held = False
+        self._accepted_next_offsets: dict[tuple[str, int], int] = {}
+        self._commit_state = 'unrequested'
+        self._committed_offsets: dict[Any, Any] = {}
+
+    def configure_handoff(self, handoff: OutputHandoff, *, start_paused: bool = False) -> None:
+        if not handoff.enabled:
+            return
+        if self._iterator is not None or self._handoff is not None:
+            raise ValueError('maintenance must be configured before Kafka intake')
+        self._handoff = handoff
+        if start_paused:
+            handoff.request_drain()
+        stream = self
+
+        class Listener(ConsumerRebalanceListener):  # type: ignore[misc]  # Pinned kafka-python has no type metadata.
+            def on_partitions_revoked(self, partitions):
+                if stream._assignment_seen and partitions:
+                    handoff.membership_changed()
+                stream._membership_epoch += 1
+
+            def on_partitions_assigned(self, partitions):
+                if stream._assignment_seen:
+                    handoff.membership_changed()
+                stream._assignment_seen = True
+                stream._membership_epoch += 1
+                if not handoff.admission_open and partitions:
+                    stream._consumer.pause(*partitions)
+
+        self._consumer.subscribe(topics=sorted(self._consumer.subscription()), listener=Listener())
+
+    @property
+    def holding(self) -> bool:
+        return self._held and time.monotonic() - self._last_membership_poll <= 2
+
+    def request_handoff_commit(self) -> bool:
+        handoff = self._handoff
+        if handoff is None:
+            return False
+        with self._consumer_lock:
+            if self._commit_state in {'pending', 'confirmed'}:
+                return True
+            if self._commit_state == 'failed':
+                return False
+            snapshot = handoff.snapshot()
+            if (
+                snapshot['state'] != 'draining'
+                or snapshot['active']
+                or snapshot['poll_active']
+                or snapshot['pending_bytes']
+                or snapshot['pending_batches']
+                or snapshot['pending_deliveries']
+                or snapshot['blocked_reasons']
+                or not self._held
+                or not self._assignment_seen
+                or time.monotonic() - self._last_membership_poll > 2
+            ):
+                return False
+            assignment = set(self._consumer.assignment())
+            epoch = self._membership_epoch
+            # Pinned kafka-python 1.4.7 uses this metadata-only snapshot for its
+            # own automatic commits. position() may block fetching a position;
+            # never interrupt membership service with that network operation.
+            offsets = dict(self._consumer._subscription.all_consumed_offsets())
+            if not assignment or set(offsets) != assignment:
+                return False
+            for partition, value in offsets.items():
+                expected = self._accepted_next_offsets.get((partition.topic, partition.partition))
+                if expected is not None and value.offset != expected:
+                    handoff.block('invalid_source_record')
+                    return False
+            self._commit_state = 'pending'
+
+            def committed(actual_offsets, response) -> None:
+                if epoch != self._membership_epoch or assignment != set(self._consumer.assignment()):
+                    self._commit_state = 'failed'
+                    handoff.membership_changed()
+                elif response is not None or actual_offsets != offsets:
+                    self._commit_state = 'failed'
+                    handoff.block('offset_commit_failed')
+                else:
+                    self._committed_offsets = offsets
+                    self._commit_state = 'confirmed'
+
+            try:
+                # The returned future may represent coordinator lookup rather
+                # than the actual commit. Only the explicit callback is proof.
+                self._consumer.commit_async(offsets=offsets, callback=committed)
+            except Exception:
+                self._commit_state = 'failed'
+                handoff.block('offset_commit_failed')
+                return False
+            return True
+
+    def handoff_offsets(self) -> list[dict[str, Any]]:
+        return [
+            {'topic': partition.topic, 'partition': partition.partition, 'next_offset': value.offset}
+            for partition, value in sorted(self._committed_offsets.items())
+        ]
+
+    def _handoff_gen(self) -> Iterator[BaseAckingContext[Action]]:
+        handoff = self._handoff
+        assert handoff is not None
+        while True:
+            with self._consumer_lock:
+                held = not handoff.admission_open
+                self._held = held
+                assignment = self._consumer.assignment()
+                if held:
+                    if assignment:
+                        self._consumer.pause(*assignment)
+                    admitted = handoff.begin_membership_poll()
+                else:
+                    if assignment:
+                        self._consumer.resume(*assignment)
+                    admitted = handoff.begin_poll()
+                if not admitted:
+                    continue
+                try:
+                    polled = self._consumer.poll(timeout_ms=250, max_records=1)
+                except Exception:
+                    handoff.accept_poll_result([])
+                    handoff.block('invalid_source_record')
+                    gevent.sleep(0.25)
+                    continue
+                records = [record for batch in polled.values() for record in batch]
+                positions = [SourcePosition(record.topic, record.partition, record.offset) for record in records]
+                # poll() advances offsets before returning. Never discard a
+                # returned record merely because admission closed meanwhile.
+                handoff.accept_poll_result(positions)
+                for position in positions:
+                    self._accepted_next_offsets[(position.topic, position.partition)] = position.offset + 1
+                self._last_membership_poll = time.monotonic()
+                self._held = held
+                if self._commit_state == 'confirmed' and held:
+                    handoff.certify(committed=True)
+            for record, position in zip(records, positions):
+                try:
+                    data = json.loads(record.value)
+                    action_data = data['data']
+                    action = Action(
+                        action_id=int(action_data['action_id']),
+                        action_name=action_data['action_name'],
+                        data=action_data['data'],
+                        timestamp=parse_go_timestamp(data['send_time']),
+                    )
+                    handoff.bind_action(action, position)
+                except Exception:
+                    handoff.block('invalid_source_record')
+                    handoff.finish(position, 'failed')
+                    continue
+                yield HandoffActionContext(action, handoff, position)
 
     def _gen(self) -> Iterator[BaseAckingContext[Action]]:
+        if self._handoff is not None:
+            yield from self._handoff_gen()
+            return
         while True:
             try:
                 with metrics.timed('kafka_consumer.lock_time'):

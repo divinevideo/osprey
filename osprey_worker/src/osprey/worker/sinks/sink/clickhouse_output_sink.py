@@ -6,11 +6,16 @@ would ingest so the query UI works unchanged.
 """
 
 import json
+from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 import sentry_sdk
+from gevent.lock import Semaphore
 from osprey.engine.executor.execution_context import ExecutionResult
 from osprey.worker.lib.osprey_shared.logging import get_logger
+from osprey.worker.sinks.output_handoff import OutputHandoff, SourcePosition
+from osprey.worker.sinks.single_attempt_insert import NativeInsertOnce
 from osprey.worker.sinks.sink.output_sink import BaseOutputSink
 
 logger = get_logger()
@@ -18,6 +23,22 @@ logger = get_logger()
 # Default batch size before flushing to ClickHouse
 DEFAULT_BATCH_SIZE = 500
 DEFAULT_FLUSH_INTERVAL_SECONDS = 5
+
+
+@dataclass(frozen=True)
+class BufferedRow:
+    values: dict[str, Any]
+    size: int
+    source: SourcePosition | None
+
+
+@dataclass(frozen=True)
+class OwnedBatch:
+    columns: tuple[str, ...]
+    rows: tuple[tuple[Any, ...], ...]
+    query_id: str
+    sources: tuple[SourcePosition | None, ...]
+    size: int
 
 
 class ClickHouseOutputSink(BaseOutputSink):
@@ -36,13 +57,39 @@ class ClickHouseOutputSink(BaseOutputSink):
         table: str = 'osprey_events',
         database: str = 'osprey',
         batch_size: int = DEFAULT_BATCH_SIZE,
+        handoff: OutputHandoff | None = None,
     ):
         self._client = clickhouse_client
         self._table = table
         self._database = database
         self._batch_size = batch_size
-        self._buffer: list[dict[str, Any]] = []
+        self._buffer: list[BufferedRow] = []
+        self._accounting_owner = object()
+        self._state_lock = Semaphore()
+        self._flush_lock = Semaphore()
+        self._owned_batch: OwnedBatch | None = None
+        self._owned_outcome: str | None = None
+        self._handoff: OutputHandoff | None = None
+        self._sender: NativeInsertOnce | None = None
+        if handoff is not None:
+            self.configure_handoff(handoff)
         logger.info(f'ClickHouseOutputSink initialized: {database}.{table} (batch_size={batch_size})')
+
+    def configure_handoff(self, handoff: OutputHandoff) -> None:
+        if not handoff.enabled:
+            return
+        with self._state_lock:
+            if self._buffer or self._owned_batch is not None or self._handoff is not None:
+                handoff.block('required_output_failed')
+                raise ValueError('maintenance must be configured before accepting output')
+            try:
+                self._sender = NativeInsertOnce(self._client)
+            except Exception:
+                handoff.block('transport_guard_unavailable')
+                raise
+            self._handoff = handoff
+            self.max_retries = 0
+            self.manages_insert_transport = True
 
     def will_do_work(self, result: ExecutionResult) -> bool:
         return True
@@ -84,54 +131,106 @@ class ClickHouseOutputSink(BaseOutputSink):
             if rule_hits:
                 row['__rule_hits'] = json.dumps(rule_hits)
 
-            self._buffer.append(row)
-
-            if len(self._buffer) >= self._batch_size:
+            source = self._handoff.source_for_action(result.action) if self._handoff else None
+            item = BufferedRow(row, len(json.dumps(row).encode()), source)
+            with self._state_lock:
+                self._buffer.append(item)
+                self._update_pending()
+                full = len(self._buffer) >= self._batch_size or (
+                    self._handoff is not None and not self._handoff.admission_open
+                )
+            if full:
                 self._flush()
 
         except Exception as e:
+            if self._handoff:
+                self._handoff.block('required_output_failed')
             logger.error(f'ClickHouse sink error: {e}')
             sentry_sdk.capture_exception(error=e)
 
-    def _flush(self) -> None:
-        if not self._buffer:
-            return
-
-        rows_to_flush = len(self._buffer)
-        try:
-            # Build union of all column names across the batch. Different
-            # event types produce different feature keys, so row dicts
-            # vary within a batch.
-            all_columns: dict[str, Any] = {}
-            for row in self._buffer:
-                for col, val in row.items():
-                    if col not in all_columns or all_columns[col] is None:
-                        all_columns[col] = val
-            column_names = list(all_columns.keys())
-
-            # Infer a type-appropriate default for missing values.
-            # ClickHouse columns are not Nullable, so None is not valid.
-            col_defaults: dict[str, Any] = {}
-            for col in column_names:
-                sample = all_columns[col]
-                if isinstance(sample, (int, float)):
-                    col_defaults[col] = 0
-                else:
-                    col_defaults[col] = ''
-
-            data = [[row.get(col, col_defaults[col]) for col in column_names] for row in self._buffer]
-            self._client.insert(
-                f'{self._database}.{self._table}',
-                data=data,
-                column_names=column_names,
-                column_oriented=False,
+    def _update_pending(self) -> None:
+        if self._handoff:
+            self._handoff.set_pending_output(
+                bytes_pending=sum(row.size for row in self._buffer)
+                + (self._owned_batch.size if self._owned_batch else 0),
+                batches_pending=int(bool(self._buffer)) + int(self._owned_batch is not None),
+                owner=self._accounting_owner,
             )
-            logger.info(f'Flushed {rows_to_flush} rows to ClickHouse')
-        except Exception as e:
-            logger.error(f'ClickHouse flush error ({rows_to_flush} rows): {e}')
-            sentry_sdk.capture_exception(error=e)
-        finally:
-            self._buffer.clear()
+
+    def _seal(self) -> OwnedBatch | None:
+        if not self._buffer:
+            return None
+        buffered = self._buffer
+        # Build the same union and type defaults as the existing writer. Seal
+        # everything before yielding to transport; new appends own another list.
+        all_columns: dict[str, Any] = {}
+        for item in buffered:
+            for col, value in item.values.items():
+                if col not in all_columns or all_columns[col] is None:
+                    all_columns[col] = value
+        columns = tuple(all_columns)
+        defaults = {col: 0 if isinstance(value, (int, float)) else '' for col, value in all_columns.items()}
+        rows = tuple(tuple(item.values.get(col, defaults[col]) for col in columns) for item in buffered)
+        batch = OwnedBatch(
+            columns=columns,
+            rows=rows,
+            query_id='osprey-handoff-' + uuid4().hex,
+            sources=tuple(item.source for item in buffered),
+            size=len(json.dumps((columns, rows)).encode()),
+        )
+        self._buffer = []
+        return batch
+
+    def _flush(self) -> None:
+        # A second flusher may append while insertion yields, then waits here.
+        # It never submits the first owner's rows or clears its successor list.
+        with self._flush_lock:
+            with self._state_lock:
+                if self._owned_batch is not None:
+                    return  # Unconfirmed batches require independent settlement.
+                self._owned_batch = self._seal()
+                batch = self._owned_batch
+                self._update_pending()
+            if batch is None:
+                return
+            if self._sender is not None:
+                receipt = self._sender.send(
+                    f'{self._database}.{self._table}', batch.columns, batch.rows, batch.query_id
+                )
+                with self._state_lock:
+                    self._owned_outcome = receipt.outcome
+                    if receipt.outcome == 'confirmed':
+                        self._owned_batch = None
+                    else:
+                        assert self._handoff is not None
+                        self._handoff.block(
+                            'insert_outcome_unknown' if receipt.outcome == 'unknown' else 'insert_not_sent'
+                        )
+                    self._update_pending()
+                return
+            try:
+                self._client.insert(
+                    f'{self._database}.{self._table}',
+                    data=batch.rows,
+                    column_names=batch.columns,
+                    column_oriented=False,
+                )
+                logger.info(f'Flushed {len(batch.rows)} rows to ClickHouse')
+            except Exception as error:
+                logger.error(f'ClickHouse flush error ({len(batch.rows)} rows): {error}')
+                sentry_sdk.capture_exception(error=error)
+            finally:
+                # Default mode keeps its existing failure policy, but releases
+                # only this batch; concurrent pending work is never cleared.
+                with self._state_lock:
+                    self._owned_batch = None
+
+    def maintenance_status(self) -> dict[str, Any]:
+        with self._state_lock:
+            return {
+                'pending_rows': len(self._buffer) + (len(self._owned_batch.rows) if self._owned_batch else 0),
+                'unknown_batches': int(self._owned_batch is not None and self._owned_outcome == 'unknown'),
+            }
 
     def stop(self) -> None:
         self._flush()

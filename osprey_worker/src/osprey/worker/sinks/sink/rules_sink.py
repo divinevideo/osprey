@@ -2,7 +2,7 @@ import logging
 import os
 from dataclasses import dataclass
 from random import randint
-from typing import Optional
+from typing import Callable, Optional
 
 import gevent
 import sentry_sdk
@@ -16,6 +16,7 @@ from osprey.worker.lib.osprey_engine import OspreyEngine
 from osprey.worker.lib.osprey_shared.logging import info_log_osprey_action
 from osprey.worker.lib.snowflake import generate_snowflake
 from osprey.worker.lib.sources_config.subkeys.action_config import ActionConfigs
+from osprey.worker.sinks.output_handoff import Disposition
 from osprey.worker.sinks.utils.acking_contexts import (
     BaseAckingContext,
     VerdictsAckingContext,
@@ -23,7 +24,7 @@ from osprey.worker.sinks.utils.acking_contexts import (
 
 from ..utils.envoy_status import get_envoy_check_server
 from .base_sink import BaseSink
-from .input_stream import BaseInputStream
+from .input_stream import BaseInputStream, HandoffActionContext
 from .output_sink import BaseOutputSink
 
 
@@ -85,7 +86,11 @@ class RulesRunner:
         self._udf_helpers = udf_helpers
 
     def classify_one(
-        self, action: Action, tag: str, parent_tracer_span: Optional[TracerSpan] = None
+        self,
+        action: Action,
+        tag: str,
+        parent_tracer_span: Optional[TracerSpan] = None,
+        report_disposition: Optional[Callable[[Disposition], None]] = None,
     ) -> Optional[ExecutionResult]:
         sample_config = self._sampler.sample(action)
         tags = [
@@ -98,6 +103,8 @@ class RulesRunner:
 
         if sample_config.drop:
             metrics.increment('dropped_message', tags=tags)
+            if report_disposition:
+                report_disposition('skipped')
             return None
         result: Optional[ExecutionResult] = None
         # noinspection PyBroadException
@@ -112,8 +119,12 @@ class RulesRunner:
             with metrics.timed('handled_output', tags=tags, use_ms=True):
                 self._output_sink.push(result)
                 info_log_osprey_action(action.action_id, action.action_name, 'pushed to output sink')
+                if report_disposition:
+                    report_disposition('completed')
                 return result
         except BaseException:
+            if report_disposition:
+                report_disposition('failed')
             sentry_sdk.capture_exception()
             return result
 
@@ -143,6 +154,8 @@ class RulesSink(BaseSink):
                     if action.data.get('osprey_v2_skip_async_classification', False) or action.data.get(
                         'osprey_skip_async', False
                     ):
+                        if isinstance(message_context, HandoffActionContext):
+                            message_context.set_disposition('skipped')
                         continue
 
                     with tracer.start_span('osprey.classify_one', child_of=None) as span:
@@ -153,7 +166,17 @@ class RulesSink(BaseSink):
                             action.action_id = generate_snowflake(retries=3).to_int()
 
                         info_log_osprey_action(action.action_id, action.action_name, 'beginning classify_one')
-                        result = self._rules_runner.classify_one(action, tag='sink:rules-sink', parent_tracer_span=span)
+                        if isinstance(message_context, HandoffActionContext):
+                            result = self._rules_runner.classify_one(
+                                action,
+                                tag='sink:rules-sink',
+                                parent_tracer_span=span,
+                                report_disposition=message_context.set_disposition,
+                            )
+                        else:
+                            result = self._rules_runner.classify_one(
+                                action, tag='sink:rules-sink', parent_tracer_span=span
+                            )
                         if isinstance(message_context, VerdictsAckingContext):
                             if result is None:
                                 info_log_osprey_action(
