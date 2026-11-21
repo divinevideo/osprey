@@ -23,6 +23,19 @@ def test_maintenance_refuses_automatic_or_unspecified_offset_reset(policy: str |
     assert consumer._coordinator.config['enable_auto_commit'] is True
 
 
+@pytest.mark.parametrize('policy', ['latest', 'earliest'])
+def test_maintenance_checks_effective_subscription_not_mutated_config(policy: str) -> None:
+    from kafka.consumer.subscription_state import SubscriptionState
+
+    consumer = Consumer()
+    consumer._subscription = SubscriptionState(policy)
+    consumer.config['auto_offset_reset'] = 'none'
+    assert consumer._subscription.has_default_offset_reset_policy()
+    with pytest.raises(ValueError, match='automatic offset reset'):
+        KafkaInputStream(consumer).configure_handoff(OutputHandoff(enabled=True), start_paused=True)
+    assert consumer.listener is None
+
+
 def test_disabled_maintenance_keeps_existing_reset_policy() -> None:
     consumer = Consumer()
     consumer.config['auto_offset_reset'] = 'latest'

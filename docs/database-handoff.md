@@ -16,7 +16,9 @@ not a measured maintenance or rollback budget.
 Maintenance requires an explicitly configured `OSPREY_KAFKA_GROUP_ID`; consumers
 without a named group are rejected before polling. Maintenance also requires
 `auto_offset_reset='none'`; the command selects it only when maintenance is
-enabled, and the stream rejects an automatic-reset consumer before intake.
+enabled, and the stream checks both constructor configuration and the pinned
+subscription's effective policy before intake. Updating the mutable consumer
+config after construction is insufficient.
 Missing broker offsets block startup. An out-of-range offset blocks delivery
 rather than silently skipping forward or replaying from the beginning. Verify
 that the recorded boundary is retained before activation: a cached startup

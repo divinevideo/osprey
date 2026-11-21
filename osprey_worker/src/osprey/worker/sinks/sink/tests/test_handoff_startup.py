@@ -13,7 +13,8 @@ def startup():
     handoff = OutputHandoff(enabled=True)
     consumer = Consumer(record())
     consumer._subscription = SimpleNamespace(
-        all_consumed_offsets=lambda: {p: OffsetAndMetadata(42, '') for p in consumer.assigned}
+        has_default_offset_reset_policy=lambda: False,
+        all_consumed_offsets=lambda: {p: OffsetAndMetadata(42, '') for p in consumer.assigned},
     )
     stream = KafkaInputStream(consumer)
     stream.configure_handoff(handoff, start_paused=True)
