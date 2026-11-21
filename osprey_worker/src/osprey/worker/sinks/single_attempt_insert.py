@@ -65,7 +65,16 @@ class SingleAttemptPool:
             kwargs['retries'] = Retry(total=0, connect=0, read=0, redirect=0, status=0)
             kwargs['redirect'] = False
             self.dispatched = True
-        return self._pool.request(method, url, **kwargs)
+        response = self._pool.request(method, url, **kwargs)
+        if native and (
+            response.status != 200
+            or response.headers.get('X-ClickHouse-Query-Id') != self._query_id
+            or response.data != b''
+        ):
+            # HTTP 200 can contain a late exception or an intermediary page.
+            # Never release rows on an uncorrelated or error-bearing response.
+            raise TransportReplayRefused('native insert response is not a correlated success')
+        return response
 
 
 class NativeInsertOnce:
@@ -99,7 +108,9 @@ class NativeInsertOnce:
                 'wait_for_async_insert': 1,
                 'wait_end_of_query': 1,
             }
-            self._client.data_insert(context)
+            summary = self._client.data_insert(context)
+            if summary.query_id() != query_id:
+                raise TransportReplayRefused('native insert summary is not correlated')
             self._guard.confirm()
             return InsertReceipt(query_id, 'confirmed')
         except BaseException:
