@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import gevent
-from kafka import TopicPartition
+from kafka import OffsetAndMetadata, TopicPartition
 from osprey.worker.sinks.output_handoff import OutputHandoff, SourcePosition
 from osprey.worker.sinks.sink.input_stream import KafkaInputStream
 
@@ -16,6 +16,11 @@ class Consumer:
         self.assigned = {TopicPartition('actions', 0)}
         self.polls = 0
         self.on_poll: Any = None
+        self.config = {'group_id': 'synthetic-group'}
+        self._coordinator = SimpleNamespace(config={'enable_auto_commit': True})
+        self._subscription = SimpleNamespace(
+            all_consumed_offsets=lambda: {p: OffsetAndMetadata(42, '') for p in self.assigned}
+        )
 
     def subscription(self) -> set[str]:
         return {'actions'}
@@ -114,7 +119,8 @@ def test_new_assignment_is_paused_and_invalidates_held_certificate() -> None:
     handoff = OutputHandoff(enabled=True)
     consumer = Consumer()
     stream = KafkaInputStream(consumer)
-    stream.configure_handoff(handoff, start_paused=True)
+    stream.configure_handoff(handoff)
+    handoff.request_drain()
     assert handoff.certify(committed=True)
     consumer.listener.on_partitions_revoked(consumer.assigned)
     consumer.assigned = {TopicPartition('actions', 1)}
@@ -145,7 +151,8 @@ def commit_fixture() -> tuple[Any, Any, Any, Any]:
 
     consumer.commit_async = commit_async
     stream = KafkaInputStream(consumer)
-    stream.configure_handoff(handoff, start_paused=True)
+    stream.configure_handoff(handoff)
+    handoff.request_drain()
     waiting = gevent.spawn(next, stream)
     gevent.sleep(0.02)
     return handoff, consumer, stream, waiting

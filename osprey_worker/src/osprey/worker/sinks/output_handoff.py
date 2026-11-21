@@ -111,8 +111,34 @@ class OutputHandoff:
         with self._lock:
             if not self.enabled or self._state == 'blocked':
                 return False
-            if self._state == 'running':
+            if self._state == 'paused':
+                # No work was admitted. A reset-derived startup position is
+                # not an accepted boundary and must never be committed.
+                self._block('startup_cancelled')
+            elif self._state == 'running':
                 self._state = 'draining'
+            return True
+
+    def pause_before_intake(self) -> None:
+        with self._lock:
+            if not self.enabled or self._state != 'running' or self._accepted_total or self._poll_active:
+                raise ValueError('startup pause requires untouched maintenance intake')
+            self._state = 'paused'
+
+    def activate_before_intake(self) -> bool:
+        with self._lock:
+            if (
+                not self.enabled
+                or self._state != 'paused'
+                or self._accepted_total
+                or self._poll_active
+                or self._pending_bytes
+                or self._pending_batches
+                or self._pending_deliveries
+                or self._reasons
+            ):
+                return False
+            self._state = 'running'
             return True
 
     def _block(self, reason: str) -> None:
@@ -134,6 +160,7 @@ class OutputHandoff:
             'invalid_source_record',
             'transport_guard_unavailable',
             'duplicate_source_position',
+            'startup_cancelled',
         }
         if reason not in allowed:
             raise ValueError('unknown handoff failure category')
@@ -183,7 +210,12 @@ class OutputHandoff:
                 self._block('required_output_failed')
 
     def membership_changed(self) -> None:
-        self.block('membership_changed')
+        with self._lock:
+            # A pristine startup pause has neither accepted work nor a drain
+            # certificate. Group joins can change its assignment safely.
+            if self._state == 'paused' and not self._accepted_total:
+                return
+            self._block('membership_changed')
 
     def certify(self, *, committed: bool) -> bool:
         with self._lock:
