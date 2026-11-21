@@ -72,3 +72,22 @@ def test_kafka_pending_payloads_share_the_admission_memory_budget() -> None:
     assert not handoff.admission_open
     assert handoff.snapshot()['state'] == 'blocked'
     assert sink.maintenance_status()['pending_deliveries'] == 1
+
+
+def test_two_sinks_cannot_clear_each_others_pending_delivery() -> None:
+    from osprey.worker.sinks.sink.output_sink import MultiOutputSink
+
+    handoff = OutputHandoff(enabled=True)
+    first, second = Producer(), Producer()
+    outputs = MultiOutputSink([KafkaOutputSink('first', first), KafkaOutputSink('second', second)])
+    outputs.configure_handoff(handoff)
+    outputs.push(accepted(handoff))
+    handoff.finish(SourcePosition('actions', 0, 42), 'completed')
+    handoff.request_drain()
+    second.future.success(None)
+    outputs.stop()
+    assert handoff.snapshot()['pending_deliveries'] == 1
+    assert handoff.snapshot()['pending_bytes'] == len(b'{"Synthetic":true}')
+    assert not handoff.certify(committed=True)
+    first.future.success(None)
+    assert handoff.certify(committed=True)

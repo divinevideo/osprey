@@ -129,3 +129,18 @@ def test_completed_source_records_do_not_accumulate_unbounded_action_state() -> 
         pass
     assert not handoff.admission_open
     assert 'duplicate_source_position' in handoff.snapshot()['blocked_reasons']
+
+
+def test_output_owners_share_capacity_without_overwriting_each_other() -> None:
+    handoff = OutputHandoff(enabled=True, max_pending_bytes=40)
+    first, second, third = object(), object(), object()
+    handoff.set_pending_output(bytes_pending=20, batches_pending=1, owner=first)
+    handoff.set_pending_output(bytes_pending=10, batches_pending=1, owner=second)
+    assert handoff.snapshot()['pending_bytes'] == 30
+    assert handoff.snapshot()['pending_batches'] == 2
+    handoff.set_pending_output(bytes_pending=0, batches_pending=0, owner=first)
+    assert handoff.snapshot()['pending_bytes'] == 10
+    handoff.set_pending_deliveries(1, bytes_pending=35, owner=third)
+    assert handoff.snapshot()['pending_bytes'] == 45
+    assert not handoff.admission_open
+    assert 'output_capacity_exceeded' in handoff.snapshot()['blocked_reasons']

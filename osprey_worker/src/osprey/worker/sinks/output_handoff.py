@@ -38,6 +38,8 @@ class OutputHandoff:
         self._finished: Counter[Disposition] = Counter()
         self._last_offset: dict[tuple[str, int], int] = {}
         self._actions: dict[int, tuple[Any, SourcePosition]] = {}
+        self._output_owners: dict[object, tuple[int, int]] = {}
+        self._delivery_owners: dict[object, tuple[int, int]] = {}
         self._pending_bytes = 0
         self._pending_batches = 0
         self._pending_deliveries = 0
@@ -150,24 +152,32 @@ class OutputHandoff:
             if disposition == 'failed':
                 self._block('classification_failed')
 
-    def set_pending_output(self, *, bytes_pending: int, batches_pending: int) -> None:
+    def set_pending_output(self, *, bytes_pending: int, batches_pending: int, owner: object = None) -> None:
         if bytes_pending < 0 or batches_pending < 0:
             raise ValueError('negative pending output')
         with self._lock:
-            self._pending_bytes = bytes_pending
-            self._pending_batches = batches_pending
-            if bytes_pending + self._delivery_bytes > self.max_pending_bytes:
+            if bytes_pending or batches_pending:
+                self._output_owners[owner] = (bytes_pending, batches_pending)
+            else:
+                self._output_owners.pop(owner, None)
+            self._pending_bytes = sum(value[0] for value in self._output_owners.values())
+            self._pending_batches = sum(value[1] for value in self._output_owners.values())
+            if self._pending_bytes + self._delivery_bytes > self.max_pending_bytes:
                 self._block('output_capacity_exceeded')
             elif self._state == 'drained' and (bytes_pending or batches_pending):
                 self._block('required_output_failed')
 
-    def set_pending_deliveries(self, count: int, *, bytes_pending: int = 0) -> None:
+    def set_pending_deliveries(self, count: int, *, bytes_pending: int = 0, owner: object = None) -> None:
         if count < 0 or bytes_pending < 0 or (count == 0 and bytes_pending != 0):
             raise ValueError('negative pending deliveries')
         with self._lock:
-            self._pending_deliveries = count
-            self._delivery_bytes = bytes_pending
-            if self._pending_bytes + bytes_pending > self.max_pending_bytes:
+            if count or bytes_pending:
+                self._delivery_owners[owner] = (count, bytes_pending)
+            else:
+                self._delivery_owners.pop(owner, None)
+            self._pending_deliveries = sum(value[0] for value in self._delivery_owners.values())
+            self._delivery_bytes = sum(value[1] for value in self._delivery_owners.values())
+            if self._pending_bytes + self._delivery_bytes > self.max_pending_bytes:
                 self._block('output_capacity_exceeded')
             if self._state == 'drained' and count:
                 self._block('required_output_failed')

@@ -64,6 +64,7 @@ class ClickHouseOutputSink(BaseOutputSink):
         self._database = database
         self._batch_size = batch_size
         self._buffer: list[BufferedRow] = []
+        self._accounting_owner = object()
         self._state_lock = Semaphore()
         self._flush_lock = Semaphore()
         self._owned_batch: OwnedBatch | None = None
@@ -153,6 +154,7 @@ class ClickHouseOutputSink(BaseOutputSink):
                 bytes_pending=sum(row.size for row in self._buffer)
                 + (self._owned_batch.size if self._owned_batch else 0),
                 batches_pending=int(bool(self._buffer)) + int(self._owned_batch is not None),
+                owner=self._accounting_owner,
             )
 
     def _seal(self) -> OwnedBatch | None:

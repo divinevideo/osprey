@@ -32,7 +32,12 @@ classification or sibling moderation effects.
 
 Kafka output retains delivery payloads until their individual futures acknowledge
 success. A producer flush alone cannot establish delivery. Its pending payloads
-share the admission memory budget. Already accepted oversized output remains
+share the admission memory budget. Pending state is aggregated by sink owner, so
+one sink's acknowledgement cannot clear another's outstanding work. Primary
+review-item submission errors are reported into maintenance accounting even when
+the sink preserves its existing catch-and-continue behavior. Optional enrichment
+keeps its existing fail-open policy; noncritical remote effects do not become
+transactional. Already accepted oversized output remains
 owned and blocks further admission; arbitrary allocations inside classification
 are outside this bound. Completed source records become counters and per-partition
 boundaries rather than an ever-growing collection of action objects.

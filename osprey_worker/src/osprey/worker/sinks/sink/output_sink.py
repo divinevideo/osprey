@@ -37,9 +37,10 @@ class BaseOutputSink(abc.ABC):
     # A maintenance insert owns its transport deadline and immutable payload.
     # Other sinks retain their existing timeout/retry policies.
     manages_insert_transport: bool = False
+    _handoff_observer: OutputHandoff | None = None
 
     def configure_handoff(self, handoff: OutputHandoff) -> None:
-        pass
+        self._handoff_observer = handoff if handoff.enabled else None
 
     @abc.abstractmethod
     def will_do_work(self, result: ExecutionResult) -> bool:

@@ -27,6 +27,7 @@ class KafkaOutputSink(BaseOutputSink):
         self._kafka_topic = kafka_topic
         self._kafka_producer = kafka_producer
         self._handoff: OutputHandoff | None = None
+        self._accounting_owner = object()
         self._lock = Semaphore()
         self._deliveries: dict[int, PendingDelivery] = {}
         self._next_delivery = 0
@@ -43,7 +44,9 @@ class KafkaOutputSink(BaseOutputSink):
     def _update_pending(self) -> None:
         assert self._handoff is not None
         self._handoff.set_pending_deliveries(
-            len(self._deliveries), bytes_pending=sum(len(value.payload) for value in self._deliveries.values())
+            len(self._deliveries),
+            bytes_pending=sum(len(value.payload) for value in self._deliveries.values()),
+            owner=self._accounting_owner,
         )
 
     def _confirmed(self, token: int, metadata: Any) -> None:
