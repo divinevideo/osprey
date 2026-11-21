@@ -12,6 +12,12 @@ The transform is pinned to worker source
 
 - Supply ordered, recorded evaluations from exactly one worker and partition.
   Source coordinates remain attached; repeated action IDs are preserved.
+- Supply rows in the order the worker pushed them to the sink, which must also
+  be strictly increasing offset order. A worker running more than one rules-sink
+  greenlet (`OSPREY_RULES_SINK_NUM_WORKERS` above 1) can push out of offset
+  order, and its buffer is refused. Do not sort such a buffer to pass the check:
+  row order decides the union's column order and which sample picks each
+  missing-member default.
 - Fewer than 100 rows may form a partial buffer. A 100th row would have triggered
   the legacy automatic flush, so this helper refuses it.
 - Preserve the original union of columns and the first present value's type.

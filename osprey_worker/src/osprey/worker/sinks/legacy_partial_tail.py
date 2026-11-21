@@ -64,8 +64,10 @@ def prepare_legacy_partial_tail(
     first-present samples choose missing union-member defaults (0 or ''),
     while entirely absent columns stay omitted for server defaults. Never
     combine workers, split by month, filter TTL-expired rows, or fill all schema
-    columns. Offset gaps may represent separately proven skips; this function
-    neither supplies that proof nor joins/commits a consumer group.
+    columns. Rows must be in push order, which must equal increasing offset
+    order; never sort a buffer to satisfy that check. Offset gaps may represent
+    separately proven skips; this function neither supplies that proof nor
+    joins/commits a consumer group.
 
     The supplied column set must come from independently checked schema. Unknown
     columns and malformed evaluations fail the entire preparation, without
