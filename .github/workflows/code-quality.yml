@@ -122,4 +122,3 @@ jobs:
       - name: Run Rust tests
         run: cargo test --verbose
         working-directory: osprey_coordinator
-        continue-on-error: true
