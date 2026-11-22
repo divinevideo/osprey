@@ -324,7 +324,15 @@ def test_manifest_requires_both_base_columns() -> None:
         owner.encode_legacy_tail_manifest(invalid, legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
 
 
-@pytest.mark.parametrize('fault', ['duplicate_member', 'float_tag', 'constant', 'source_duplicate', 'unknown_member'])
+@pytest.mark.parametrize('text', ['\ud800', '\udfff'])
+def test_unpaired_surrogate_refuses_manifest_encoding(text: str) -> None:
+    with pytest.raises(owner.LegacyTailAttemptBlocked, match='invalid manifest Unicode'):
+        owner.encode_legacy_tail_manifest(prepared(text), legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
+
+
+@pytest.mark.parametrize(
+    'fault', ['duplicate_member', 'float_tag', 'constant', 'source_duplicate', 'unknown_member', 'lone_surrogate']
+)
 def test_malformed_reviewed_bytes_refuse_before_reservation(tmp_path: Path, monkeypatch: Any, fault: str) -> None:
     tmp_path.chmod(0o700)
     name, _ = manifest(tmp_path)
@@ -334,6 +342,8 @@ def test_malformed_reviewed_bytes_refuse_before_reservation(tmp_path: Path, monk
         raw = path.read_bytes().replace(b'{', b'{"format":"duplicate",', 1)
     elif fault == 'constant':
         raw = path.read_bytes().replace(b'"synthetic-private-value"', b'NaN')
+    elif fault == 'lone_surrogate':
+        raw = path.read_bytes().replace(b'"synthetic-private-value"', b'"\\ud800"')
     else:
         if fault == 'float_tag':
             data['rows'][0][2] = {'f64': 'broken'}
