@@ -7,6 +7,7 @@ import struct
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -331,6 +332,16 @@ def test_unpaired_surrogate_refuses_manifest_encoding(text: str) -> None:
         owner.encode_legacy_tail_manifest(prepared(text), legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
 
 
+@pytest.fixture
+def default_int_str_limit() -> Iterator[None]:
+    # PYTHONINTMAXSTRDIGITS=0 would disable the limit these refusals rely on.
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(sys.int_info.default_max_str_digits)
+    yield
+    sys.set_int_max_str_digits(previous)
+
+
+@pytest.mark.usefixtures('default_int_str_limit')
 @pytest.mark.parametrize('field', ['value', 'offset'])
 def test_integer_beyond_int_string_limit_refuses_manifest_encoding(field: str) -> None:
     data = prepared(10**5000) if field == 'value' else replace(prepared(), sources=(('synthetic-input', 0, 10**5000),))

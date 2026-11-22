@@ -1,4 +1,6 @@
 import json
+import sys
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -200,6 +202,16 @@ def test_unpaired_surrogate_in_prepared_value_refuses_tail(text: str) -> None:
         prepare_legacy_partial_tail(items, allowed_columns=COLUMNS)
 
 
+@pytest.fixture
+def default_int_str_limit() -> Iterator[None]:
+    # PYTHONINTMAXSTRDIGITS=0 would disable the limit these refusals rely on.
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(sys.int_info.default_max_str_digits)
+    yield
+    sys.set_int_max_str_digits(previous)
+
+
+@pytest.mark.usefixtures('default_int_str_limit')
 def test_action_id_beyond_int_string_limit_refuses_tail() -> None:
     with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
         prepare_legacy_partial_tail([evaluation(0, {}, action_id=10**5000)], allowed_columns=COLUMNS)
