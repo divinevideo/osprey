@@ -65,11 +65,15 @@ the current schema, and supply the verified authoritative client.
 The encoder produces reviewable bytes containing the exact prepared payload,
 legacy container identity and schema hash. The prepared payload uses the same
 UTF-8 capacity check when preparing, encoding, and reading it back. The manifest
-file itself has a separate size limit. It preserves scalar types and float
-bits, including NULL, signed zero and non-finite values, without executable
-deserialization. Store the manifest in a private, owned POSIX directory on
-durable storage, with private regular files and reliable exclusive creation,
-atomic replacement and file/directory `fsync`. Retain its reviewed SHA256.
+file itself has a separate 32 MiB limit and escapes non-ASCII characters, which
+can take up to three times their UTF-8 size. A prepared tail made mostly of
+non-ASCII text can therefore pass preparation and still be refused by the
+encoder with `manifest capacity exceeded`, before any reservation. The encoder
+preserves scalar types and float bits, including NULL, signed zero and
+non-finite values, without executable deserialization. Store the manifest in a
+private, owned POSIX directory on durable storage, with private regular files
+and reliable exclusive creation, atomic replacement and file/directory `fsync`.
+Retain its reviewed SHA256.
 The schema hash binds that review; the submission guard does not query or
 certify the live schema, authority or source boundaries.
 
