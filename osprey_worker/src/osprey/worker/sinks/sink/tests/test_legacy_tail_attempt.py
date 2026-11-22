@@ -7,13 +7,20 @@ import struct
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from osprey.worker.sinks import legacy_tail_attempt as owner
-from osprey.worker.sinks.legacy_partial_tail import PreparedLegacyTail
+from osprey.worker.sinks.legacy_partial_tail import (
+    PreparedLegacyTail,
+    RecordedEvaluation,
+    prepare_legacy_partial_tail,
+)
 
 SCHEMA = 'a' * 64
 CONTAINER = 'b' * 64
@@ -49,6 +56,37 @@ def submit(directory: Path, name: str, digest: str, schema: str = SCHEMA) -> Any
 
 def records(directory: Path) -> list[Path]:
     return list(directory.glob('attempt-*.json'))
+
+
+def test_manifest_round_trip_uses_prepared_utf8_capacity(tmp_path: Path, monkeypatch: Any) -> None:
+    tmp_path.chmod(0o700)
+    evaluation = RecordedEvaluation(
+        'synthetic-input',
+        0,
+        12,
+        7,
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        json.dumps({'FixtureValue': '界' * 100}, ensure_ascii=False),
+    )
+    batch = prepare_legacy_partial_tail([evaluation], allowed_columns=frozenset(prepared().columns))
+    assert batch is not None
+    monkeypatch.setattr(owner, 'MAX_PREPARATION_BYTES', batch.serialized_size)
+    body = owner.encode_legacy_tail_manifest(batch, legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
+    assert len(body) > batch.serialized_size
+    path = tmp_path / 'reviewed.json'
+    path.write_bytes(body)
+    path.chmod(0o600)
+
+    def send(table: str, columns: Any, rows: Any, query_id: str) -> Any:
+        return SimpleNamespace(outcome='unknown', query_id=query_id)
+
+    monkeypatch.setattr(owner, 'NativeInsertOnce', lambda client: SimpleNamespace(send=send))
+    result = submit(tmp_path, path.name, hashlib.sha256(body).hexdigest())
+    assert result.pending == batch
+
+    monkeypatch.setattr(owner, 'MAX_PREPARATION_BYTES', batch.serialized_size - 1)
+    with pytest.raises(owner.LegacyTailAttemptBlocked, match='partial tail capacity exceeded'):
+        owner.encode_legacy_tail_manifest(batch, legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
 
 
 def test_reservation_is_durable_before_native_send_and_confirmation_is_retained(
@@ -288,7 +326,32 @@ def test_manifest_requires_both_base_columns() -> None:
         owner.encode_legacy_tail_manifest(invalid, legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
 
 
-@pytest.mark.parametrize('fault', ['duplicate_member', 'float_tag', 'constant', 'source_duplicate', 'unknown_member'])
+@pytest.mark.parametrize('text', ['\ud800', '\udfff'])
+def test_unpaired_surrogate_refuses_manifest_encoding(text: str) -> None:
+    with pytest.raises(owner.LegacyTailAttemptBlocked, match='invalid manifest Unicode'):
+        owner.encode_legacy_tail_manifest(prepared(text), legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
+
+
+@pytest.fixture
+def default_int_str_limit() -> Iterator[None]:
+    # PYTHONINTMAXSTRDIGITS=0 would disable the limit these refusals rely on.
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(sys.int_info.default_max_str_digits)
+    yield
+    sys.set_int_max_str_digits(previous)
+
+
+@pytest.mark.usefixtures('default_int_str_limit')
+@pytest.mark.parametrize('field', ['value', 'offset'])
+def test_integer_beyond_int_string_limit_refuses_manifest_encoding(field: str) -> None:
+    data = prepared(10**5000) if field == 'value' else replace(prepared(), sources=(('synthetic-input', 0, 10**5000),))
+    with pytest.raises(owner.LegacyTailAttemptBlocked, match='unsupported manifest value'):
+        owner.encode_legacy_tail_manifest(data, legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
+
+
+@pytest.mark.parametrize(
+    'fault', ['duplicate_member', 'float_tag', 'constant', 'source_duplicate', 'unknown_member', 'lone_surrogate']
+)
 def test_malformed_reviewed_bytes_refuse_before_reservation(tmp_path: Path, monkeypatch: Any, fault: str) -> None:
     tmp_path.chmod(0o700)
     name, _ = manifest(tmp_path)
@@ -298,6 +361,8 @@ def test_malformed_reviewed_bytes_refuse_before_reservation(tmp_path: Path, monk
         raw = path.read_bytes().replace(b'{', b'{"format":"duplicate",', 1)
     elif fault == 'constant':
         raw = path.read_bytes().replace(b'"synthetic-private-value"', b'NaN')
+    elif fault == 'lone_surrogate':
+        raw = path.read_bytes().replace(b'"synthetic-private-value"', b'"\\ud800"')
     else:
         if fault == 'float_tag':
             data['rows'][0][2] = {'f64': 'broken'}

@@ -11,13 +11,18 @@ import os
 import re
 import stat
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from osprey.worker.sinks.legacy_partial_tail import LEGACY_BATCH_SIZE, MAX_PREPARATION_BYTES, PreparedLegacyTail
+from osprey.worker.sinks.legacy_partial_tail import (
+    LEGACY_BATCH_SIZE,
+    MAX_PREPARATION_BYTES,
+    PreparedLegacyTail,
+    prepared_payload_size,
+)
 from osprey.worker.sinks.single_attempt_insert import NativeInsertOnce
 
 MAX_MANIFEST_BYTES = 32 * 1024 * 1024
@@ -60,7 +65,7 @@ def _unscalar(value: Any) -> Any:
     raise LegacyTailAttemptBlocked('unsupported manifest value')
 
 
-def _payload(prepared: PreparedLegacyTail) -> dict[str, Any]:
+def _payload(prepared: PreparedLegacyTail) -> tuple[dict[str, Any], int]:
     if type(prepared.columns) is not tuple or not prepared.columns or len(prepared.columns) > 256:
         raise LegacyTailAttemptBlocked('invalid manifest columns')
     if not all(type(name) is str and name for name in prepared.columns) or len(set(prepared.columns)) != len(
@@ -101,9 +106,15 @@ def _payload(prepared: PreparedLegacyTail) -> dict[str, Any]:
         except ValueError:
             raise LegacyTailAttemptBlocked('invalid legacy timestamp') from None
         rows.append([_scalar(value) for value in row])
-    if len(json.dumps((prepared.columns, prepared.rows)).encode()) > MAX_PREPARATION_BYTES:
+    try:
+        size = prepared_payload_size(prepared.columns, prepared.rows)
+    except UnicodeEncodeError:
+        raise LegacyTailAttemptBlocked('invalid manifest Unicode') from None
+    except ValueError:
+        raise LegacyTailAttemptBlocked('unsupported manifest value') from None
+    if size > MAX_PREPARATION_BYTES:
         raise LegacyTailAttemptBlocked('partial tail capacity exceeded')
-    return {'columns': prepared.columns, 'rows': rows, 'sources': prepared.sources}
+    return {'columns': prepared.columns, 'rows': rows, 'sources': prepared.sources}, size
 
 
 def _json(value: Any) -> bytes:
@@ -118,14 +129,19 @@ def encode_legacy_tail_manifest(prepared: PreparedLegacyTail, *, legacy_containe
     """
     if not _hash_identifier(legacy_container_id) or not _hash_identifier(schema_sha256):
         raise LegacyTailAttemptBlocked('invalid manifest identity')
-    raw = _json(
-        {
-            'format': _FORMAT,
-            'legacy_container_id': legacy_container_id,
-            'schema_sha256': schema_sha256,
-            **_payload(prepared),
-        }
-    )
+    payload, _ = _payload(prepared)
+    try:
+        raw = _json(
+            {
+                'format': _FORMAT,
+                'legacy_container_id': legacy_container_id,
+                'schema_sha256': schema_sha256,
+                **payload,
+            }
+        )
+    except ValueError:
+        # Source offsets are not measured by _payload and can exceed the int-to-str limit.
+        raise LegacyTailAttemptBlocked('unsupported manifest value') from None
     if len(raw) > MAX_MANIFEST_BYTES:
         raise LegacyTailAttemptBlocked('manifest capacity exceeded')
     return raw
@@ -167,10 +183,10 @@ def _decode(raw: bytes, schema_sha256: str) -> tuple[dict[str, Any], PreparedLeg
         columns=tuple(data['columns']),
         rows=tuple(tuple(_unscalar(v) for v in row) for row in data['rows']),
         sources=tuple(tuple(source) for source in data['sources']),
-        serialized_size=len(raw),
+        serialized_size=0,
     )
-    _payload(prepared)
-    return data, prepared
+    _, size = _payload(prepared)
+    return data, replace(prepared, serialized_size=size)
 
 
 def _private(info: os.stat_result, *, directory: bool) -> bool:

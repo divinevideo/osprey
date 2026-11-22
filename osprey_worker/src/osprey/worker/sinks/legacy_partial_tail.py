@@ -21,6 +21,13 @@ class LegacyTailPreparationError(ValueError):
     """Refuse preparation without including private source values in errors."""
 
 
+def _dumps_feature(value: Any) -> str:
+    try:
+        return json.dumps(value)
+    except RecursionError:
+        raise LegacyTailPreparationError('invalid evaluation object') from None
+
+
 @dataclass(frozen=True, repr=False)
 class RecordedEvaluation:
     topic: str
@@ -33,10 +40,20 @@ class RecordedEvaluation:
 
 @dataclass(frozen=True)
 class PreparedLegacyTail:
+    """serialized_size measures the prepared payload, not the manifest or transport.
+
+    See prepared_payload_size for the encoding used to bound preparation capacity.
+    """
+
     columns: tuple[str, ...] = field(repr=False)
     rows: tuple[tuple[Any, ...], ...] = field(repr=False)
     sources: tuple[tuple[str, int, int], ...] = field(repr=False)
     serialized_size: int
+
+
+def prepared_payload_size(columns: tuple[str, ...], rows: tuple[tuple[Any, ...], ...]) -> int:
+    """Count UTF-8 bytes of JSON-encoded columns and rows, without ASCII escaping."""
+    return len(json.dumps((columns, rows), ensure_ascii=False).encode('utf-8'))
 
 
 def prepare_legacy_partial_tail(
@@ -51,8 +68,10 @@ def prepare_legacy_partial_tail(
     first-present samples choose missing union-member defaults (0 or ''),
     while entirely absent columns stay omitted for server defaults. Never
     combine workers, split by month, filter TTL-expired rows, or fill all schema
-    columns. Offset gaps may represent separately proven skips; this function
-    neither supplies that proof nor joins/commits a consumer group.
+    columns. Rows must be in push order, which must equal increasing offset
+    order; never sort a buffer to satisfy that check. Offset gaps may represent
+    separately proven skips; this function neither supplies that proof nor
+    joins/commits a consumer group.
 
     The supplied column set must come from independently checked schema. Unknown
     columns and malformed evaluations fail the entire preparation, without
@@ -66,6 +85,8 @@ def prepare_legacy_partial_tail(
         raise LegacyTailPreparationError('partial tail requires fewer than 100 rows')
     if not evaluations:
         return None
+    if not all(isinstance(item, RecordedEvaluation) and isinstance(item.timestamp, datetime) for item in evaluations):
+        raise LegacyTailPreparationError('invalid evaluation object')
 
     source = (evaluations[0].topic, evaluations[0].partition)
     last_offset = -1
@@ -91,7 +112,7 @@ def prepare_legacy_partial_tail(
             raise LegacyTailPreparationError('preparation capacity exceeded')
         try:
             features = json.loads(item.extracted_features_json)
-        except (TypeError, UnicodeError, ValueError):
+        except (RecursionError, TypeError, UnicodeError, ValueError):
             raise LegacyTailPreparationError('invalid evaluation object') from None
         if not isinstance(features, dict):
             raise LegacyTailPreparationError('invalid evaluation object')
@@ -101,12 +122,12 @@ def prepare_legacy_partial_tail(
         for key, value in features.items():
             if key.startswith('__'):
                 if key in _PASSTHROUGH and value is not None:
-                    row[key] = json.dumps(value) if isinstance(value, (list, dict)) else value
+                    row[key] = _dumps_feature(value) if isinstance(value, (list, dict)) else value
                 continue
             if value is None:
                 continue
             if isinstance(value, (list, dict)):
-                row[key] = json.dumps(value)
+                row[key] = _dumps_feature(value)
             elif isinstance(value, bool):
                 row[key] = int(value)
                 rule_hits[key] = value
@@ -127,7 +148,12 @@ def prepare_legacy_partial_tail(
     columns = tuple(samples)
     defaults = {column: 0 if isinstance(value, (int, float)) else '' for column, value in samples.items()}
     rows = tuple(tuple(row.get(column, defaults[column]) for column in columns) for row in buffered)
-    size = len(json.dumps((columns, rows)).encode())
+    try:
+        size = prepared_payload_size(columns, rows)
+    except ValueError:
+        # ASCII JSON can decode to a string containing an unpaired surrogate, and a
+        # caller-supplied integer can exceed Python's int-to-str digit limit.
+        raise LegacyTailPreparationError('invalid evaluation object') from None
     if size > max_bytes:
         raise LegacyTailPreparationError('preparation capacity exceeded')
     return PreparedLegacyTail(

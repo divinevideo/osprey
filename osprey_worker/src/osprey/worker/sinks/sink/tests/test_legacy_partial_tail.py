@@ -1,8 +1,13 @@
 import json
+import sys
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from osprey.worker.sinks import legacy_partial_tail
 from osprey.worker.sinks.legacy_partial_tail import (
     LegacyTailPreparationError,
     RecordedEvaluation,
@@ -91,7 +96,7 @@ def test_do_not_combine_workers_or_split_tail_into_individual_batches() -> None:
 
 @pytest.mark.parametrize('offsets', [(1, 1), (2, 1), (-1, 0)])
 def test_duplicate_reversed_or_negative_source_positions_refuse(offsets: tuple[int, int]) -> None:
-    with pytest.raises(LegacyTailPreparationError):
+    with pytest.raises(LegacyTailPreparationError, match='source offsets must increase'):
         prepare_legacy_partial_tail([evaluation(n, {}) for n in offsets], allowed_columns=COLUMNS)
 
 
@@ -104,6 +109,37 @@ def test_100th_row_cannot_be_claimed_as_unsubmitted_partial_tail() -> None:
 def test_non_object_evaluations_refuse(features: object) -> None:
     with pytest.raises(LegacyTailPreparationError, match='evaluation object'):
         prepare_legacy_partial_tail([evaluation(0, features)], allowed_columns=COLUMNS)
+
+
+@pytest.mark.parametrize(
+    'inputs',
+    [
+        [{'topic': 'synthetic-input', 'partition': 0}],
+        [evaluation(0, {}), {'topic': 'synthetic-input', 'partition': 0}],
+        [evaluation(0, {}, timestamp=TIME.isoformat())],
+        [evaluation(0, {}, timestamp=None)],
+    ],
+)
+def test_malformed_evaluation_objects_and_timestamps_refuse(inputs: list[Any]) -> None:
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail(inputs, allowed_columns=COLUMNS)
+
+
+def test_deeply_nested_features_refuse_instead_of_recursing() -> None:
+    depth = 200_000
+    nested_json = '{"Object": ' + '[' * depth + ']' * depth + '}'
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail([evaluation(0, {}, extracted_features_json=nested_json)], allowed_columns=COLUMNS)
+
+
+@pytest.mark.parametrize('key', ['Object', '__verdicts'])
+def test_features_too_deep_to_reserialize_refuse(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    nested: list[Any] = []
+    for _ in range(200_000):
+        nested = [nested]
+    monkeypatch.setattr(legacy_partial_tail, 'json', SimpleNamespace(loads=lambda _: {key: nested}, dumps=json.dumps))
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail([evaluation(0, {})], allowed_columns=COLUMNS)
 
 
 def test_invalid_json_and_unknown_columns_refuse_without_exposing_content() -> None:
@@ -136,6 +172,51 @@ def test_capacity_failure_never_returns_a_truncated_batch() -> None:
         prepare_legacy_partial_tail([evaluation(0, {'Name': 'x' * 1024})], allowed_columns=COLUMNS, max_bytes=128)
 
 
+def test_prepared_payload_capacity_includes_generated_columns_and_values() -> None:
+    item = evaluation(0, {})
+    columns = ('__time', '__action_id')
+    rows = ((TIME.isoformat(), 0),)
+    size = len(json.dumps((columns, rows), ensure_ascii=False).encode())
+    assert len(item.extracted_features_json.encode()) < size
+
+    batch = prepare_legacy_partial_tail([item], allowed_columns=COLUMNS, max_bytes=size)
+    assert batch is not None
+    assert batch.serialized_size == size
+    with pytest.raises(LegacyTailPreparationError, match='preparation capacity exceeded'):
+        prepare_legacy_partial_tail([item], allowed_columns=COLUMNS, max_bytes=size - 1)
+
+
+def test_capacity_counts_utf8_bytes_not_ascii_escapes() -> None:
+    text = '\u4e2d' * 50_000  # 150,000 UTF-8 bytes, 300,000 bytes once ASCII-escaped
+    item = evaluation(0, {}, extracted_features_json=json.dumps({'Name': text}, ensure_ascii=False))
+    batch = prepare_legacy_partial_tail([item], allowed_columns=COLUMNS, max_bytes=200_000)
+    assert batch is not None
+    assert batch.rows[0][batch.columns.index('Name')] == text
+    assert batch.serialized_size == len(json.dumps((batch.columns, batch.rows), ensure_ascii=False).encode())
+
+
+@pytest.mark.parametrize('text', ['\ud800', '\udfff'])
+def test_unpaired_surrogate_in_prepared_value_refuses_tail(text: str) -> None:
+    items = [evaluation(0, {'Name': 'valid'}), evaluation(1, {'Name': text})]
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail(items, allowed_columns=COLUMNS)
+
+
+@pytest.fixture
+def default_int_str_limit() -> Iterator[None]:
+    # PYTHONINTMAXSTRDIGITS=0 would disable the limit these refusals rely on.
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(sys.int_info.default_max_str_digits)
+    yield
+    sys.set_int_max_str_digits(previous)
+
+
+@pytest.mark.usefixtures('default_int_str_limit')
+def test_action_id_beyond_int_string_limit_refuses_tail() -> None:
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail([evaluation(0, {}, action_id=10**5000)], allowed_columns=COLUMNS)
+
+
 def test_input_list_changes_cannot_mutate_prepared_payload() -> None:
     inputs = [evaluation(0, {'Name': 'private-synthetic-value'})]
     batch = prepare_legacy_partial_tail(inputs, allowed_columns=COLUMNS)
@@ -153,19 +234,19 @@ def test_cannot_disable_preparation_capacity(limit: int) -> None:
 
 
 @pytest.mark.parametrize(
-    'field,value',
+    'field,value,message',
     [
-        ('partition', True),
-        ('offset', True),
-        ('action_id', True),
-        ('topic', ''),
-        ('topic', 1),
-        ('topic', b'synthetic'),
-        ('topic', ['synthetic']),
+        ('partition', True, 'invalid source position'),
+        ('offset', True, 'source offsets must increase'),
+        ('action_id', True, 'invalid action identifier'),
+        ('topic', '', 'invalid source position'),
+        ('topic', 1, 'invalid source position'),
+        ('topic', b'synthetic', 'invalid source position'),
+        ('topic', ['synthetic'], 'invalid source position'),
     ],
 )
-def test_invalid_source_and_identity_types_refuse(field: str, value: object) -> None:
-    with pytest.raises(LegacyTailPreparationError):
+def test_invalid_source_and_identity_types_refuse(field: str, value: object, message: str) -> None:
+    with pytest.raises(LegacyTailPreparationError, match=message):
         prepare_legacy_partial_tail([replace(evaluation(0, {}), **{field: value})], allowed_columns=COLUMNS)
 
 

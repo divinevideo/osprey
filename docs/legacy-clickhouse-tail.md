@@ -12,6 +12,12 @@ The transform is pinned to worker source
 
 - Supply ordered, recorded evaluations from exactly one worker and partition.
   Source coordinates remain attached; repeated action IDs are preserved.
+- Supply rows in the order the worker pushed them to the sink, which must also
+  be strictly increasing offset order. A worker running more than one rules-sink
+  greenlet (`OSPREY_RULES_SINK_NUM_WORKERS` above 1) can push out of offset
+  order, and its buffer is refused. Do not sort such a buffer to pass the check:
+  row order decides the union's column order and which sample picks each
+  missing-member default.
 - Fewer than 100 rows may form a partial buffer. A 100th row would have triggered
   the legacy automatic flush, so this helper refuses it.
 - Preserve the original union of columns and the first present value's type.
@@ -24,6 +30,9 @@ The transform is pinned to worker source
 - Supply an independently verified schema column set. Unknown columns, malformed
   evaluations, mixed partitions, duplicate/reversed source offsets and excessive
   size refuse the whole preparation. There is no truncated success result.
+  Size is counted in UTF-8 bytes, for both the recorded input and the
+  JSON-encoded prepared columns and rows (`serialized_size`). Prepared values
+  must be encodable as UTF-8.
 
 Preparation does **not** prove that those evaluations form the complete buffer,
 that it was never submitted, or that required moderation effects succeeded.
@@ -54,11 +63,17 @@ complete never-submitted per-worker tail and required privacy outcomes, verify
 the current schema, and supply the verified authoritative client.
 
 The encoder produces reviewable bytes containing the exact prepared payload,
-legacy container identity and schema hash. It preserves scalar types and float
-bits, including NULL, signed zero and non-finite values, without executable
-deserialization. Store the manifest in a private, owned POSIX directory on
-durable storage, with private regular files and reliable exclusive creation,
-atomic replacement and file/directory `fsync`. Retain its reviewed SHA256.
+legacy container identity and schema hash. The prepared payload uses the same
+UTF-8 capacity check when preparing, encoding, and reading it back. The manifest
+file itself has a separate 32 MiB limit and escapes non-ASCII characters, which
+can take up to three times their UTF-8 size. A prepared tail made mostly of
+non-ASCII text can therefore pass preparation and still be refused by the
+encoder with `manifest capacity exceeded`, before any reservation. The encoder
+preserves scalar types and float bits, including NULL, signed zero and
+non-finite values, without executable deserialization. Store the manifest in a
+private, owned POSIX directory on durable storage, with private regular files
+and reliable exclusive creation, atomic replacement and file/directory `fsync`.
+Retain its reviewed SHA256.
 The schema hash binds that review; the submission guard does not query or
 certify the live schema, authority or source boundaries.
 
