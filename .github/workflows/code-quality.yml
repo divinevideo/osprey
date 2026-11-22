@@ -108,6 +108,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Clippy linting
         run: cargo clippy -- -D warnings
@@ -121,4 +122,3 @@ jobs:
       - name: Run Rust tests
         run: cargo test --verbose
         working-directory: osprey_coordinator
-        continue-on-error: true
