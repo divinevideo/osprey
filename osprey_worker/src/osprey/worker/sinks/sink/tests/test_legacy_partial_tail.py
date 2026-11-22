@@ -200,6 +200,11 @@ def test_unpaired_surrogate_in_prepared_value_refuses_tail(text: str) -> None:
         prepare_legacy_partial_tail(items, allowed_columns=COLUMNS)
 
 
+def test_action_id_beyond_int_string_limit_refuses_tail() -> None:
+    with pytest.raises(LegacyTailPreparationError, match='invalid evaluation object'):
+        prepare_legacy_partial_tail([evaluation(0, {}, action_id=10**5000)], allowed_columns=COLUMNS)
+
+
 def test_input_list_changes_cannot_mutate_prepared_payload() -> None:
     inputs = [evaluation(0, {'Name': 'private-synthetic-value'})]
     batch = prepare_legacy_partial_tail(inputs, allowed_columns=COLUMNS)

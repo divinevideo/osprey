@@ -110,6 +110,8 @@ def _payload(prepared: PreparedLegacyTail) -> tuple[dict[str, Any], int]:
         size = prepared_payload_size(prepared.columns, prepared.rows)
     except UnicodeEncodeError:
         raise LegacyTailAttemptBlocked('invalid manifest Unicode') from None
+    except ValueError:
+        raise LegacyTailAttemptBlocked('unsupported manifest value') from None
     if size > MAX_PREPARATION_BYTES:
         raise LegacyTailAttemptBlocked('partial tail capacity exceeded')
     return {'columns': prepared.columns, 'rows': rows, 'sources': prepared.sources}, size
@@ -128,14 +130,18 @@ def encode_legacy_tail_manifest(prepared: PreparedLegacyTail, *, legacy_containe
     if not _hash_identifier(legacy_container_id) or not _hash_identifier(schema_sha256):
         raise LegacyTailAttemptBlocked('invalid manifest identity')
     payload, _ = _payload(prepared)
-    raw = _json(
-        {
-            'format': _FORMAT,
-            'legacy_container_id': legacy_container_id,
-            'schema_sha256': schema_sha256,
-            **payload,
-        }
-    )
+    try:
+        raw = _json(
+            {
+                'format': _FORMAT,
+                'legacy_container_id': legacy_container_id,
+                'schema_sha256': schema_sha256,
+                **payload,
+            }
+        )
+    except ValueError:
+        # Source offsets are not measured by _payload and can exceed the int-to-str limit.
+        raise LegacyTailAttemptBlocked('unsupported manifest value') from None
     if len(raw) > MAX_MANIFEST_BYTES:
         raise LegacyTailAttemptBlocked('manifest capacity exceeded')
     return raw

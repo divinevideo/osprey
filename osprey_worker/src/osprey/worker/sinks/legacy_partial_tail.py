@@ -150,8 +150,9 @@ def prepare_legacy_partial_tail(
     rows = tuple(tuple(row.get(column, defaults[column]) for column in columns) for row in buffered)
     try:
         size = prepared_payload_size(columns, rows)
-    except UnicodeEncodeError:
-        # ASCII JSON can decode to a string containing an unpaired surrogate.
+    except ValueError:
+        # ASCII JSON can decode to a string containing an unpaired surrogate, and a
+        # caller-supplied integer can exceed Python's int-to-str digit limit.
         raise LegacyTailPreparationError('invalid evaluation object') from None
     if size > max_bytes:
         raise LegacyTailPreparationError('preparation capacity exceeded')

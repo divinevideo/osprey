@@ -7,6 +7,7 @@ import struct
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -328,6 +329,13 @@ def test_manifest_requires_both_base_columns() -> None:
 def test_unpaired_surrogate_refuses_manifest_encoding(text: str) -> None:
     with pytest.raises(owner.LegacyTailAttemptBlocked, match='invalid manifest Unicode'):
         owner.encode_legacy_tail_manifest(prepared(text), legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
+
+
+@pytest.mark.parametrize('field', ['value', 'offset'])
+def test_integer_beyond_int_string_limit_refuses_manifest_encoding(field: str) -> None:
+    data = prepared(10**5000) if field == 'value' else replace(prepared(), sources=(('synthetic-input', 0, 10**5000),))
+    with pytest.raises(owner.LegacyTailAttemptBlocked, match='unsupported manifest value'):
+        owner.encode_legacy_tail_manifest(data, legacy_container_id=CONTAINER, schema_sha256=SCHEMA)
 
 
 @pytest.mark.parametrize(
