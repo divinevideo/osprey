@@ -315,8 +315,11 @@ def test_handoff_timer_flush_unknown_blocks_and_never_replays(monkeypatch: Any) 
 
 
 def test_handoff_timer_flush_sender_exception_blocks_handoff(monkeypatch: Any) -> None:
+    calls: list[Any] = []
+
     class Sender:
         def send(self, table: str, columns: Any, rows: Any, query_id: str) -> InsertReceipt:
+            calls.append(query_id)
             raise RuntimeError('synthetic sender crash')
 
     monkeypatch.setattr(
@@ -335,6 +338,9 @@ def test_handoff_timer_flush_sender_exception_blocks_handoff(monkeypatch: Any) -
         with gevent.Timeout(2):
             while handoff.admission_open:
                 gevent.sleep(0.01)
+        gevent.sleep(0.05)
+        sink.stop()
+        assert len(calls) == 1
         assert 'required_output_failed' in handoff.snapshot()['blocked_reasons']
         assert sink.maintenance_status()['pending_rows'] == 1
         assert not handoff.certify(committed=True)
@@ -345,7 +351,7 @@ def test_handoff_timer_flush_sender_exception_blocks_handoff(monkeypatch: Any) -
 def test_invalid_flush_interval_rejected() -> None:
     import pytest
 
-    for bad in (-1, -0.01, float('inf'), float('-inf'), float('nan')):
+    for bad in (-1, -0.01, float('inf'), float('-inf'), float('nan'), True, False):
         with pytest.raises(ValueError):
             ClickHouseOutputSink(SimpleNamespace(), flush_interval_seconds=bad)
 
@@ -363,23 +369,26 @@ def test_batch_full_and_stop_cancel_pending_timer() -> None:
             batches.append([row[action_column] for row in data])
 
     sink = ClickHouseOutputSink(Client(), batch_size=2, flush_interval_seconds=0.05)
-    sink.push(result(1))
-    assert sink._flush_timer is not None
-    sink.push(result(2))
-    assert sink._flush_timer is None
-    assert batches == [[1, 2]]
-    gevent.sleep(0.08)
-    assert batches == [[1, 2]]
+    try:
+        sink.push(result(1))
+        assert sink._flush_timer is not None
+        sink.push(result(2))
+        assert sink._flush_timer is None
+        assert batches == [[1, 2]]
+        gevent.sleep(0.08)
+        assert batches == [[1, 2]]
 
-    sink.push(result(3))
-    assert sink._flush_timer is not None
-    sink.stop()
-    assert sink._flush_timer is None
-    assert batches == [[1, 2], [3]]
+        sink.push(result(3))
+        assert sink._flush_timer is not None
+        sink.stop()
+        assert sink._flush_timer is None
+        assert batches == [[1, 2], [3]]
 
-    # Post-stop pushes do not arm a new timer.
-    sink.push(result(4))
-    assert sink._flush_timer is None
+        # Post-stop pushes do not arm a new timer.
+        sink.push(result(4))
+        assert sink._flush_timer is None
+    finally:
+        sink.stop()
 
 
 def test_stalled_inflight_flush_does_not_pile_up_timers() -> None:
@@ -439,5 +448,35 @@ def test_default_mode_timer_flush_enforces_timeout() -> None:
             while sink._flush_in_progress:
                 gevent.sleep(0.01)
         assert sink.maintenance_status()['pending_rows'] == 0
+    finally:
+        sink.stop()
+
+
+def test_default_mode_timer_timeout_does_not_fire_during_error_capture(monkeypatch: Any) -> None:
+    captured = Event()
+    captured_errors: list[Exception] = []
+
+    class FailingNearTimeoutClient:
+        def insert(self, table: str, *, data: Any, column_names: Any, **kwargs: Any) -> None:
+            gevent.sleep(0.03)
+            raise RuntimeError('near-timeout insert error')
+
+    def slow_capture(*, error: Exception) -> None:
+        # Yields well past sink.timeout; timer_timeout must already be closed.
+        gevent.sleep(0.08)
+        captured_errors.append(error)
+        captured.set()
+
+    monkeypatch.setattr(
+        'osprey.worker.sinks.sink.clickhouse_output_sink.sentry_sdk.capture_exception',
+        slow_capture,
+    )
+    sink = ClickHouseOutputSink(FailingNearTimeoutClient(), batch_size=100, flush_interval_seconds=0.01)
+    sink.timeout = 0.05
+    try:
+        sink.push(result(1))
+        assert captured.wait(timeout=2)
+        assert len(captured_errors) == 1
+        assert isinstance(captured_errors[0], RuntimeError)
     finally:
         sink.stop()

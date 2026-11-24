@@ -7,6 +7,7 @@ would ingest so the query UI works unchanged.
 
 import json
 import math
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -68,6 +69,10 @@ class ClickHouseOutputSink(BaseOutputSink):
         self._batch_size = batch_size
         if flush_interval_seconds is None:
             self._flush_interval_seconds = 0.0
+        elif isinstance(flush_interval_seconds, bool):
+            raise ValueError(
+                f'flush_interval_seconds must be a finite non-negative number, got {flush_interval_seconds!r}'
+            )
         else:
             interval = float(flush_interval_seconds)
             if not math.isfinite(interval) or interval < 0:
@@ -103,6 +108,7 @@ class ClickHouseOutputSink(BaseOutputSink):
                 or self._handoff is not None
                 or self._stopped
                 or self._flush_timer is not None
+                or self._flush_in_progress
             ):
                 handoff.block('required_output_failed')
                 raise ValueError('maintenance must be configured before accepting output')
@@ -251,6 +257,8 @@ class ClickHouseOutputSink(BaseOutputSink):
                 self._cancel_flush_timer_locked()
                 self._owned_batch = self._seal()
                 batch = self._owned_batch
+                if batch is not None:
+                    self._owned_outcome = None
                 self._update_pending()
                 if batch is None:
                     return
@@ -282,14 +290,13 @@ class ClickHouseOutputSink(BaseOutputSink):
                     return
                 timer_timeout = gevent.Timeout(self.timeout) if apply_timeout else None
                 try:
-                    if timer_timeout is not None:
-                        timer_timeout.start()
-                    self._client.insert(
-                        f'{self._database}.{self._table}',
-                        data=batch.rows,
-                        column_names=batch.columns,
-                        column_oriented=False,
-                    )
+                    with timer_timeout if timer_timeout is not None else nullcontext():
+                        self._client.insert(
+                            f'{self._database}.{self._table}',
+                            data=batch.rows,
+                            column_names=batch.columns,
+                            column_oriented=False,
+                        )
                     logger.info(f'Flushed {len(batch.rows)} rows to ClickHouse')
                 except gevent.Timeout as timeout_error:
                     if timeout_error is not timer_timeout:
@@ -300,8 +307,6 @@ class ClickHouseOutputSink(BaseOutputSink):
                     logger.error(f'ClickHouse flush error ({len(batch.rows)} rows): {error}')
                     sentry_sdk.capture_exception(error=error)
                 finally:
-                    if timer_timeout is not None:
-                        timer_timeout.close()
                     with self._state_lock:
                         self._owned_batch = None
             finally:
