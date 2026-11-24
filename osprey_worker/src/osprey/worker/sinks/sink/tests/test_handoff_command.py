@@ -117,7 +117,7 @@ def pooled_child() -> None:
     )
     outputs = MultiOutputSink(
         [
-            ClickHouseOutputSink(SimpleNamespace(), batch_size=100),
+            ClickHouseOutputSink(SimpleNamespace(), batch_size=100, flush_interval_seconds=0),
             KafkaOutputSink('results', Producer()),
         ]
     )

@@ -45,7 +45,10 @@ def register_output_sinks(config: Config) -> Sequence[BaseOutputSink]:
     # ClickHouse output sink for query UI
     if config.get_bool('OSPREY_CLICKHOUSE_OUTPUT_SINK', False):
         import clickhouse_connect
-        from osprey.worker.sinks.sink.clickhouse_output_sink import ClickHouseOutputSink
+        from osprey.worker.sinks.sink.clickhouse_output_sink import (
+            DEFAULT_FLUSH_INTERVAL_SECONDS,
+            ClickHouseOutputSink,
+        )
 
         ch_client = clickhouse_connect.get_client(
             host=config.expect_str('OSPREY_CLICKHOUSE_HOST'),
@@ -60,6 +63,9 @@ def register_output_sinks(config: Config) -> Sequence[BaseOutputSink]:
                 table=config.get_str('OSPREY_CLICKHOUSE_TABLE', 'osprey_events'),
                 database=config.get_str('OSPREY_CLICKHOUSE_DATABASE', 'osprey'),
                 batch_size=config.get_int('OSPREY_CLICKHOUSE_BATCH_SIZE', 100),
+                flush_interval_seconds=config.get_float(
+                    'OSPREY_CLICKHOUSE_FLUSH_INTERVAL_SECONDS', DEFAULT_FLUSH_INTERVAL_SECONDS
+                ),
             )
         )
 
