@@ -6,6 +6,7 @@ would ingest so the query UI works unchanged.
 """
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -23,7 +24,7 @@ logger = get_logger()
 
 # Default batch size before flushing to ClickHouse
 DEFAULT_BATCH_SIZE = 500
-DEFAULT_FLUSH_INTERVAL_SECONDS = 5
+DEFAULT_FLUSH_INTERVAL_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -65,14 +66,21 @@ class ClickHouseOutputSink(BaseOutputSink):
         self._table = table
         self._database = database
         self._batch_size = batch_size
-        self._flush_interval_seconds = (
-            float(flush_interval_seconds) if flush_interval_seconds is not None and flush_interval_seconds > 0 else 0.0
-        )
+        if flush_interval_seconds is None:
+            self._flush_interval_seconds = 0.0
+        else:
+            interval = float(flush_interval_seconds)
+            if not math.isfinite(interval) or interval < 0:
+                raise ValueError(
+                    f'flush_interval_seconds must be a finite non-negative number, got {flush_interval_seconds!r}'
+                )
+            self._flush_interval_seconds = interval
         self._buffer: list[BufferedRow] = []
         self._accounting_owner = object()
         self._state_lock = Semaphore()
         self._flush_lock = Semaphore()
         self._flush_timer: gevent.Greenlet | None = None
+        self._flush_in_progress = False
         self._stopped = False
         self._owned_batch: OwnedBatch | None = None
         self._owned_outcome: str | None = None
@@ -89,7 +97,13 @@ class ClickHouseOutputSink(BaseOutputSink):
         if not handoff.enabled:
             return
         with self._state_lock:
-            if self._buffer or self._owned_batch is not None or self._handoff is not None:
+            if (
+                self._buffer
+                or self._owned_batch is not None
+                or self._handoff is not None
+                or self._stopped
+                or self._flush_timer is not None
+            ):
                 handoff.block('required_output_failed')
                 raise ValueError('maintenance must be configured before accepting output')
             try:
@@ -196,7 +210,14 @@ class ClickHouseOutputSink(BaseOutputSink):
         return batch
 
     def _schedule_flush_timer_locked(self) -> None:
-        if self._stopped or self._flush_interval_seconds <= 0 or self._flush_timer is not None or not self._buffer:
+        if (
+            self._stopped
+            or self._flush_interval_seconds <= 0
+            or self._flush_in_progress
+            or self._owned_batch is not None
+            or self._flush_timer is not None
+            or not self._buffer
+        ):
             return
         self._flush_timer = gevent.spawn_later(self._flush_interval_seconds, self._flush_from_timer)
 
@@ -207,14 +228,20 @@ class ClickHouseOutputSink(BaseOutputSink):
             timer.kill(block=False)
 
     def _flush_from_timer(self) -> None:
-        with self._state_lock:
-            if self._flush_timer is gevent.getcurrent():
-                self._flush_timer = None
-            if self._stopped or not self._buffer:
-                return
-        self._flush()
+        try:
+            with self._state_lock:
+                if self._flush_timer is gevent.getcurrent():
+                    self._flush_timer = None
+                if self._stopped or not self._buffer:
+                    return
+            self._flush(apply_timeout=True)
+        except Exception as error:
+            if self._handoff:
+                self._handoff.block('required_output_failed')
+            logger.error(f'ClickHouse timer flush error: {error}')
+            sentry_sdk.capture_exception(error=error)
 
-    def _flush(self) -> None:
+    def _flush(self, *, apply_timeout: bool = False) -> None:
         # A second flusher may append while insertion yields, then waits here.
         # It never submits the first owner's rows or clears its successor list.
         with self._flush_lock:
@@ -225,39 +252,62 @@ class ClickHouseOutputSink(BaseOutputSink):
                 self._owned_batch = self._seal()
                 batch = self._owned_batch
                 self._update_pending()
-            if batch is None:
-                return
-            if self._sender is not None:
-                receipt = self._sender.send(
-                    f'{self._database}.{self._table}', batch.columns, batch.rows, batch.query_id
-                )
-                with self._state_lock:
-                    self._owned_outcome = receipt.outcome
-                    if receipt.outcome == 'confirmed':
-                        self._owned_batch = None
-                    else:
-                        assert self._handoff is not None
-                        self._handoff.block(
-                            'insert_outcome_unknown' if receipt.outcome == 'unknown' else 'insert_not_sent'
-                        )
-                    self._update_pending()
-                return
+                if batch is None:
+                    return
+                self._flush_in_progress = True
             try:
-                self._client.insert(
-                    f'{self._database}.{self._table}',
-                    data=batch.rows,
-                    column_names=batch.columns,
-                    column_oriented=False,
-                )
-                logger.info(f'Flushed {len(batch.rows)} rows to ClickHouse')
-            except Exception as error:
-                logger.error(f'ClickHouse flush error ({len(batch.rows)} rows): {error}')
-                sentry_sdk.capture_exception(error=error)
+                if self._sender is not None:
+                    try:
+                        receipt = self._sender.send(
+                            f'{self._database}.{self._table}', batch.columns, batch.rows, batch.query_id
+                        )
+                    except Exception as error:
+                        with self._state_lock:
+                            assert self._handoff is not None
+                            self._handoff.block('required_output_failed')
+                            self._update_pending()
+                        logger.error(f'ClickHouse flush error ({len(batch.rows)} rows): {error}')
+                        sentry_sdk.capture_exception(error=error)
+                        return
+                    with self._state_lock:
+                        self._owned_outcome = receipt.outcome
+                        if receipt.outcome == 'confirmed':
+                            self._owned_batch = None
+                        else:
+                            assert self._handoff is not None
+                            self._handoff.block(
+                                'insert_outcome_unknown' if receipt.outcome == 'unknown' else 'insert_not_sent'
+                            )
+                        self._update_pending()
+                    return
+                timer_timeout = gevent.Timeout(self.timeout) if apply_timeout else None
+                try:
+                    if timer_timeout is not None:
+                        timer_timeout.start()
+                    self._client.insert(
+                        f'{self._database}.{self._table}',
+                        data=batch.rows,
+                        column_names=batch.columns,
+                        column_oriented=False,
+                    )
+                    logger.info(f'Flushed {len(batch.rows)} rows to ClickHouse')
+                except gevent.Timeout as timeout_error:
+                    if timeout_error is not timer_timeout:
+                        raise
+                    logger.error(f'ClickHouse flush timed out ({len(batch.rows)} rows) after {self.timeout}s')
+                    sentry_sdk.capture_exception(error=timeout_error)
+                except Exception as error:
+                    logger.error(f'ClickHouse flush error ({len(batch.rows)} rows): {error}')
+                    sentry_sdk.capture_exception(error=error)
+                finally:
+                    if timer_timeout is not None:
+                        timer_timeout.close()
+                    with self._state_lock:
+                        self._owned_batch = None
             finally:
-                # Default mode keeps its existing failure policy, but releases
-                # only this batch; concurrent pending work is never cleared.
                 with self._state_lock:
-                    self._owned_batch = None
+                    self._flush_in_progress = False
+                    self._schedule_flush_timer_locked()
 
     def maintenance_status(self) -> dict[str, Any]:
         with self._state_lock:
