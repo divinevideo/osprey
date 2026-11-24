@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+import gevent
 import sentry_sdk
 from gevent.lock import Semaphore
 from osprey.engine.executor.execution_context import ExecutionResult
@@ -57,23 +58,32 @@ class ClickHouseOutputSink(BaseOutputSink):
         table: str = 'osprey_events',
         database: str = 'osprey',
         batch_size: int = DEFAULT_BATCH_SIZE,
+        flush_interval_seconds: float | None = DEFAULT_FLUSH_INTERVAL_SECONDS,
         handoff: OutputHandoff | None = None,
     ):
         self._client = clickhouse_client
         self._table = table
         self._database = database
         self._batch_size = batch_size
+        self._flush_interval_seconds = (
+            float(flush_interval_seconds) if flush_interval_seconds is not None and flush_interval_seconds > 0 else 0.0
+        )
         self._buffer: list[BufferedRow] = []
         self._accounting_owner = object()
         self._state_lock = Semaphore()
         self._flush_lock = Semaphore()
+        self._flush_timer: gevent.Greenlet | None = None
+        self._stopped = False
         self._owned_batch: OwnedBatch | None = None
         self._owned_outcome: str | None = None
         self._handoff: OutputHandoff | None = None
         self._sender: NativeInsertOnce | None = None
         if handoff is not None:
             self.configure_handoff(handoff)
-        logger.info(f'ClickHouseOutputSink initialized: {database}.{table} (batch_size={batch_size})')
+        logger.info(
+            f'ClickHouseOutputSink initialized: {database}.{table} '
+            f'(batch_size={batch_size}, flush_interval_seconds={self._flush_interval_seconds})'
+        )
 
     def configure_handoff(self, handoff: OutputHandoff) -> None:
         if not handoff.enabled:
@@ -139,6 +149,10 @@ class ClickHouseOutputSink(BaseOutputSink):
                 full = len(self._buffer) >= self._batch_size or (
                     self._handoff is not None and not self._handoff.admission_open
                 )
+                if full:
+                    self._cancel_flush_timer_locked()
+                else:
+                    self._schedule_flush_timer_locked()
             if full:
                 self._flush()
 
@@ -181,6 +195,25 @@ class ClickHouseOutputSink(BaseOutputSink):
         self._buffer = []
         return batch
 
+    def _schedule_flush_timer_locked(self) -> None:
+        if self._stopped or self._flush_interval_seconds <= 0 or self._flush_timer is not None or not self._buffer:
+            return
+        self._flush_timer = gevent.spawn_later(self._flush_interval_seconds, self._flush_from_timer)
+
+    def _cancel_flush_timer_locked(self) -> None:
+        timer = self._flush_timer
+        self._flush_timer = None
+        if timer is not None and timer is not gevent.getcurrent():
+            timer.kill(block=False)
+
+    def _flush_from_timer(self) -> None:
+        with self._state_lock:
+            if self._flush_timer is gevent.getcurrent():
+                self._flush_timer = None
+            if self._stopped or not self._buffer:
+                return
+        self._flush()
+
     def _flush(self) -> None:
         # A second flusher may append while insertion yields, then waits here.
         # It never submits the first owner's rows or clears its successor list.
@@ -188,6 +221,7 @@ class ClickHouseOutputSink(BaseOutputSink):
             with self._state_lock:
                 if self._owned_batch is not None:
                     return  # Unconfirmed batches require independent settlement.
+                self._cancel_flush_timer_locked()
                 self._owned_batch = self._seal()
                 batch = self._owned_batch
                 self._update_pending()
@@ -233,4 +267,7 @@ class ClickHouseOutputSink(BaseOutputSink):
             }
 
     def stop(self) -> None:
+        with self._state_lock:
+            self._stopped = True
+            self._cancel_flush_timer_locked()
         self._flush()

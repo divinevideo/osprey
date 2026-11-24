@@ -176,3 +176,105 @@ def test_wrapper_failure_blocks_but_finishes_sibling_output_and_stop() -> None:
     assert calls == ['failing-push', 'sibling-push', 'failing-stop', 'sibling-stop']
     assert not handoff.admission_open
     assert 'required_output_failed' in handoff.snapshot()['blocked_reasons']
+
+
+def test_partial_batch_flushes_after_flush_interval() -> None:
+    flushed_event = Event()
+    batches: list[list[int]] = []
+
+    class Client:
+        def insert(self, table: str, *, data: Any, column_names: Any, **kwargs: Any) -> None:
+            action_column = list(column_names).index('__action_id')
+            batches.append([row[action_column] for row in data])
+            flushed_event.set()
+
+    sink = ClickHouseOutputSink(Client(), batch_size=100, flush_interval_seconds=0.05)
+    try:
+        sink.push(result(1))
+        sink.push(result(2))
+        assert not batches
+        assert flushed_event.wait(timeout=2)
+        assert batches == [[1, 2]]
+    finally:
+        sink.stop()
+
+
+def test_concurrent_append_during_timer_flush_schedules_followup_flush() -> None:
+    first_started = Event()
+    release_first = Event()
+    second_flushed = Event()
+    batches: list[list[int]] = []
+
+    class Client:
+        def insert(self, table: str, *, data: Any, column_names: Any, **kwargs: Any) -> None:
+            action_column = list(column_names).index('__action_id')
+            ids = [row[action_column] for row in data]
+            if not first_started.is_set():
+                first_started.set()
+                release_first.wait(timeout=2)
+            batches.append(ids)
+            if len(batches) >= 2:
+                second_flushed.set()
+
+    sink = ClickHouseOutputSink(Client(), batch_size=100, flush_interval_seconds=0.03)
+    try:
+        sink.push(result(1))
+        assert first_started.wait(timeout=2)
+        # Arrives while the first timer-triggered flush is in flight.
+        sink.push(result(2))
+        release_first.set()
+        assert second_flushed.wait(timeout=2)
+        assert batches == [[1], [2]]
+    finally:
+        sink.stop()
+
+
+def test_flush_interval_disabled_when_zero() -> None:
+    calls: list[Any] = []
+
+    class Client:
+        def insert(self, table: str, *, data: Any, column_names: Any, **kwargs: Any) -> None:
+            calls.append(data)
+
+    sink = ClickHouseOutputSink(Client(), batch_size=100, flush_interval_seconds=0)
+    sink.push(result(1))
+    gevent.sleep(0.05)
+    assert not calls
+    sink.stop()
+    assert len(calls) == 1
+
+
+def test_handoff_timer_flush_confirms_partial_batch_and_clears_pending(monkeypatch: Any) -> None:
+    flushed = Event()
+    calls: list[Any] = []
+
+    class Sender:
+        def send(self, table: str, columns: Any, rows: Any, query_id: str) -> InsertReceipt:
+            calls.append(rows)
+            flushed.set()
+            return InsertReceipt(query_id, 'confirmed')
+
+    monkeypatch.setattr(
+        'osprey.worker.sinks.sink.clickhouse_output_sink.NativeInsertOnce', lambda client: Sender(), raising=False
+    )
+    handoff = OutputHandoff(enabled=True)
+    sink = ClickHouseOutputSink(SimpleNamespace(), batch_size=100, flush_interval_seconds=0.03, handoff=handoff)
+    try:
+        accepted = result(1)
+        source = SourcePosition('actions', 0, 1)
+        assert handoff.begin_poll()
+        handoff.accept_poll_result([source])
+        handoff.bind_action(accepted.action, source)
+        sink.push(accepted)
+        handoff.finish(source, 'completed')
+        assert flushed.wait(timeout=2)
+        gevent.sleep(0)
+        assert len(calls) == 1
+        assert sink.maintenance_status()['pending_rows'] == 0
+        assert handoff.snapshot()['pending_bytes'] == 0
+        handoff.request_drain()
+        sink.stop()
+        assert len(calls) == 1
+        assert handoff.certify(committed=True)
+    finally:
+        sink.stop()
